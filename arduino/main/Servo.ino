@@ -2,7 +2,6 @@
 
 Servo servoLiftL;
 Servo servoLiftR;
-Servo servoStretch;
 Servo servoSort;
 Servo servoPan;
 
@@ -24,14 +23,13 @@ const uint16_t SERVO_MAX_US = 2500;
  */
 const uint8_t SERVO_HOME = 90;
 
-// Lower angle is up on this linkage - 150 was measured driving the arm down.
-// const uint8_t LIFT_UP     = 30;    // arm raised, clear of the ground
-const uint8_t LIFT_UP     = 60; 
-const uint8_t LIFT_DOWN   = 120;   // arm down on the item
-// Higher angle is in on this linkage - 160 was seen pulling the arm back
-// and 90 holding it out, so the stretch rests at STRETCH_IN, not at 90.
-const uint8_t STRETCH_OUT = 90;    // reaching out for the item
-const uint8_t STRETCH_IN  = 160;   // retracted over the belt - the rest position
+/*
+ * The lift only goes up and down, and down is home: the arm rests at 90,
+ * where attach() parks it. Lower angle is up on this linkage, so up is
+ * below 90 - 60 deg of travel, the same swing as the old 120 down / 60 up.
+ */
+const uint8_t LIFT_DOWN   = SERVO_HOME;   // 90, arm down - the rest position
+const uint8_t LIFT_UP     = 30;           // arm raised, item scooped up to the belt
 const uint8_t SORT_BIO    = 40;
 const uint8_t SORT_NONBIO = 140;
 
@@ -69,16 +67,12 @@ uint8_t panAngle = PAN_HOME;          // last angle sent to the pan servo
 const uint16_t CONVEYOR_RUN_MS = 5000;  // belt time from the arm to the bin
 
 void servoSetup() {
-  // attach() starts a channel at 90 unless it was given a pulse first. 90
-  // is reaching out on the stretch, so its rest pulse is loaded before
-  // attach() - otherwise the arm swings out and back at every power-up.
-  servoStretch.writeMicroseconds(map(STRETCH_IN, 0, 180, SERVO_MIN_US, SERVO_MAX_US));
-
-  servoLiftL.attach(PIN_SERVO_LIFT_L,   SERVO_MIN_US, SERVO_MAX_US);
-  servoLiftR.attach(PIN_SERVO_LIFT_R,   SERVO_MIN_US, SERVO_MAX_US);
-  servoStretch.attach(PIN_SERVO_STRETCH, SERVO_MIN_US, SERVO_MAX_US);
-  servoSort.attach(PIN_SERVO_SORT,       SERVO_MIN_US, SERVO_MAX_US);
-  servoPan.attach(PIN_SERVO_PAN,         SERVO_MIN_US, SERVO_MAX_US);
+  // attach() starts a channel at 90, and 90 is every servo's rest angle -
+  // lift down, gate and camera centred - so none needs a pulse loaded first.
+  servoLiftL.attach(PIN_SERVO_LIFT_L, SERVO_MIN_US, SERVO_MAX_US);
+  servoLiftR.attach(PIN_SERVO_LIFT_R, SERVO_MIN_US, SERVO_MAX_US);
+  servoSort.attach(PIN_SERVO_SORT,    SERVO_MIN_US, SERVO_MAX_US);
+  servoPan.attach(PIN_SERVO_PAN,      SERVO_MIN_US, SERVO_MAX_US);
 
   // Relay pin written to "off" before it becomes an output, so the belt
   // cannot twitch on for an instant at boot.
@@ -117,45 +111,30 @@ void liftMoveTo(uint8_t target) {
 }
 
 // Park every servo, gate and camera included, at its rest angle: 90 for
-// all but the stretch, which is pulled in.
+// all of them, which leaves the arm down.
 void servoResetAll() {
-  servoStretch.write(STRETCH_IN);
   servoSort.write(SERVO_HOME);
   servoPan.write(PAN_HOME);
   panAngle = PAN_HOME;
-  liftMoveTo(SERVO_HOME);
-  delay(SERVO_SETTLE_MS);
-}
-
-// Arm only - the gate is sequenced separately by sortTo().
-void armHome() {
-  servoStretch.write(STRETCH_IN);
-  liftMoveTo(SERVO_HOME);
+  liftMoveTo(LIFT_DOWN);
   delay(SERVO_SETTLE_MS);
 }
 
 /*
- * Reach out, drop onto the item, scoop it back in, then belt it to the
- * bin area and return the arm to rest. Blocking on purpose - the rover is
- * stationary for this and nothing should interleave with a half-extended
- * arm.
+ * The arm rests down, so a pickup is one lift: raise it to scoop the item
+ * up to the belt, belt it to the bin area, then lower the arm back to
+ * rest. The gate is sequenced separately by sortTo(). Blocking on purpose
+ * - the rover is stationary for this and nothing should interleave with a
+ * raised arm.
  */
 void runPickupSequence() {
   pickupBusy = true;
 
-  servoStretch.write(STRETCH_OUT);
-  delay(SERVO_SETTLE_MS);
-
-  liftMoveTo(LIFT_DOWN);
-
   liftMoveTo(LIFT_UP);              // scoop
-
-  servoStretch.write(STRETCH_IN);   // bring it over the belt
-  delay(SERVO_SETTLE_MS);
 
   conveyorPulse();
 
-  armHome();                       // lift back to 90, stretch pulled in
+  liftMoveTo(LIFT_DOWN);            // back to rest
   pickupBusy = false;
 }
 
@@ -184,16 +163,6 @@ void armLiftDown() {
   liftMoveTo(LIFT_DOWN);
 }
 
-void armStretchOut() {
-  servoStretch.write(STRETCH_OUT);
-  delay(SERVO_SETTLE_MS);
-}
-
-void armRetract() {
-  servoStretch.write(STRETCH_IN);
-  delay(SERVO_SETTLE_MS);
-}
-
 // ------------------------------------------------------- camera pan
 // Same contract: each returns once the camera has stopped moving. A move
 // to where the camera already points returns at once.
@@ -215,16 +184,14 @@ uint8_t cameraAngle() {
 
 /*
  * Bench check for the lift pair, called by hand from setup() - never from
- * loop(). Both horns should travel together and sit level at 90. If they
- * strain against each other while stopped, cut power and adjust
+ * loop(). Both horns should travel together and sit level at 90 (down).
+ * If they strain against each other while stopped, cut power and adjust
  * LIFT_R_TRIM; if one travels the wrong way, it is mounted backwards.
  */
 void servoSweepTest() {
-  liftMoveTo(SERVO_HOME);
-  liftMoveTo(LIFT_UP);
-  liftMoveTo(SERVO_HOME);
   liftMoveTo(LIFT_DOWN);
-  liftMoveTo(SERVO_HOME);
+  liftMoveTo(LIFT_UP);
+  liftMoveTo(LIFT_DOWN);
 }
 
 // --------------------------------------------------------- conveyor
