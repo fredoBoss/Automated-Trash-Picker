@@ -1,0 +1,23 @@
+description: Ultralytics YOLO11n model trained on data.yaml
+author: Ultralytics
+date: '2026-09-29T05:03:37.318609+08:00'
+version: 8.4.164
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+head: Detect
+batch: 1
+imgsz:
+- 320
+- 320
+names:
+  0: Leaves
+  1: Metal
+  2: Paper
+  3: Plastic
+args:
+  batch: 1
+  quantize: null
+channels: 3
+end2end: false
