@@ -20,7 +20,6 @@ const bool    CONV_RELAY_ACTIVE_LOW = true;
 
 
 const uint8_t PIN_SERVO_LIFT_L  = 9;
-const uint8_t PIN_SERVO_STRETCH = 10;
 const uint8_t PIN_SERVO_SORT    = 8;
 const uint8_t PIN_SERVO_LIFT_R  = 12;
 
@@ -69,7 +68,7 @@ void setup() {
   Serial.println(F("RoboSort Mega ready"));
   printHelp();
   Serial.println(F("INIT drive  - relays off, wheels stopped"));
-  Serial.println(F("INIT arm    - lift and sort servos at 90, stretch pulled in"));
+  Serial.println(F("INIT arm    - lift and sort servos at 90, arm down"));
   Serial.println(F("INIT camera - pan servo at 90, looking straight ahead"));
   Serial.println(F("INIT belt   - conveyor off"));
   printSensorCheck();
@@ -225,9 +224,7 @@ void runCommand(const char *line) {
     // Manual movement tests. Each blocks until the joint has settled.
     case 'U': enterManual(); armLiftUp();     ok(F("lift up"));                 break;
     case 'D': enterManual(); armLiftDown();   ok(F("lift down"));               break;
-    case 'S': enterManual(); armStretchOut(); ok(F("stretch out"));             break;
-    case 'R': enterManual(); armRetract();    ok(F("retract"));                 break;
-    case 'H': enterManual(); servoResetAll(); ok(F("home - servos at 90, stretch pulled in")); break;
+    case 'H': enterManual(); servoResetAll(); ok(F("home - servos at 90, arm down")); break;
     case 'C': enterManual(); conveyorRun();   ok(F("conveyor on"));             break;
     case 'O': enterManual(); conveyorStop();  ok(F("conveyor off"));            break;
 
@@ -420,7 +417,7 @@ void cancelAutoStart() {
 
 void printHelp() {
   Serial.println(F("commands: 8 or FORWARD  2 or BACKWARD  4 or LEFT  6 or RIGHT  5 or STOP"));
-  Serial.println(F("          U lift up  D lift down  S stretch out  R retract"));
+  Serial.println(F("          U lift up  D lift down"));
   Serial.println(F("          7 or LOOKLEFT  9 or LOOKRIGHT  0 or LOOKAHEAD - camera"));
   Serial.println(F("          H home     C conveyor on  O conveyor off"));
   Serial.println(F("          A autonomous  ? this list + status"));
