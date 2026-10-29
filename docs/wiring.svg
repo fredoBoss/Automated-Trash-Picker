@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="1130" viewBox="0 0 1460 1130"
+     font-family="Segoe UI, Arial, sans-serif" font-size="13">
+  <style>
+    .box  { fill: #f7f7f9; stroke: #333; stroke-width: 1.5 }
+    .mega { fill: #e8f1fb; stroke: #1b5e9e; stroke-width: 2 }
+    .pi   { fill: #fff1e6; stroke: #c45a00; stroke-width: 2 }
+    .pwr  { fill: #fdecec; stroke: #b71c1c; stroke-width: 1.5 }
+    .t    { font-size: 14px; font-weight: 600; fill: #111 }
+    .s    { font-size: 11.5px; fill: #444 }
+    .pin  { font-size: 12px; font-family: Consolas, monospace; font-weight: 700; fill: #0d3c6e }
+    .sig  { stroke: #1565c0; stroke-width: 2; fill: none }
+    .usb  { stroke: #2e7d32; stroke-width: 3; fill: none }
+    .vp   { stroke: #d32f2f; stroke-width: 2.5; fill: none }
+    .gnd  { stroke: #222; stroke-width: 2.5; fill: none }
+    .mot  { stroke: #ef6c00; stroke-width: 2.5; fill: none }
+    .warn { font-size: 11.5px; fill: #b71c1c }
+  </style>
+  <rect width="1460" height="1130" fill="#ffffff"/>
+
+  <!-- title -->
+  <text x="20" y="32" font-size="20" font-weight="700">RoboSort - wiring diagram</text>
+  <text x="20" y="52" class="s">Pins from arduino/main/main.ino (DRIVE_BY_RELAY = true) and orange_pi/config.py. Signal names match the firmware.</text>
+
+  <!-- legend -->
+  <rect x="1130" y="66" width="310" height="122" class="box"/>
+  <text x="1142" y="86" class="t">Wires</text>
+  <line x1="1142" y1="102" x2="1182" y2="102" class="sig"/><text x="1192" y="106" class="s">signal (Mega pin to device)</text>
+  <line x1="1142" y1="120" x2="1182" y2="120" class="usb"/><text x="1192" y="124" class="s">USB cable</text>
+  <line x1="1142" y1="138" x2="1182" y2="138" class="mot"/><text x="1192" y="142" class="s">motor power, switched by a relay</text>
+  <line x1="1142" y1="156" x2="1182" y2="156" class="vp"/><text x="1192" y="160" class="s">+ supply</text>
+  <line x1="1142" y1="174" x2="1182" y2="174" class="gnd"/><text x="1192" y="178" class="s">GND (all grounds joined)</text>
+
+  <!-- webcam -->
+  <rect x="200" y="78" width="200" height="64" class="box"/>
+  <text x="212" y="100" class="t">USB webcam</text>
+  <text x="212" y="118" class="s">XJS-CT48 - /dev/video1 on the Pi</text>
+  <text x="212" y="134" class="warn">plug in only with the Pi OFF</text>
+  <path d="M400 110 H560" class="usb"/>
+  <text x="480" y="102" class="s" text-anchor="middle">USB</text>
+
+  <!-- orange pi -->
+  <rect x="560" y="70" width="340" height="92" class="pi"/>
+  <text x="574" y="93" class="t">Orange Pi One (H3, Armbian)</text>
+  <text x="574" y="112" class="s">USB-A host - 5 V barrel jack - Ethernet (SSH, dev only)</text>
+  <text x="574" y="130" class="s">vision.py: camera → NCNN model → B / N / X</text>
+  <text x="574" y="148" class="s">power: Buck C into the barrel jack, never micro-USB</text>
+  <text x="915" y="96" class="warn">The Pi has ONE USB-A port:</text>
+  <text x="915" y="112" class="s">webcam + Mega need a</text>
+  <text x="915" y="128" class="s">powered USB hub</text>
+
+  <!-- pi to mega -->
+  <path d="M730 162 V220" class="usb"/>
+  <text x="742" y="186" class="s">USB cable - serial 9600 baud</text>
+  <text x="742" y="202" class="s">Pi sends B / N / X, Mega answers RX / OK / FAIL</text>
+
+  <!-- mega -->
+  <rect x="600" y="220" width="260" height="640" class="mega"/>
+  <text x="730" y="246" class="t" text-anchor="middle">Arduino Mega 2560</text>
+  <text x="730" y="264" class="s" text-anchor="middle">owns every motor, servo, relay and sensor</text>
+  <!-- left pins -->
+  <text x="608" y="300" class="pin">D22</text>
+  <text x="608" y="340" class="pin">D23</text>
+  <text x="608" y="380" class="pin">D24</text>
+  <text x="608" y="420" class="pin">D25</text>
+  <text x="608" y="600" class="pin">D26</text>
+  <!-- right pins -->
+  <text x="852" y="300" class="pin" text-anchor="end">D9</text>
+  <text x="852" y="360" class="pin" text-anchor="end">D12</text>
+  <text x="852" y="420" class="pin" text-anchor="end">D10</text>
+  <text x="852" y="480" class="pin" text-anchor="end">D8</text>
+  <text x="852" y="540" class="pin" text-anchor="end">D11</text>
+  <text x="852" y="640" class="pin" text-anchor="end">D36</text>
+  <text x="852" y="670" class="pin" text-anchor="end">D37</text>
+  <text x="852" y="760" class="pin" text-anchor="end">D34</text>
+  <text x="852" y="790" class="pin" text-anchor="end">D35</text>
+  <!-- notes inside -->
+  <text x="730" y="700" class="s" text-anchor="middle">D13 - on-board LED (heartbeat)</text>
+  <text x="730" y="716" class="s" text-anchor="middle">D2, D3 - only with L298N drivers</text>
+  <text x="730" y="732" class="s" text-anchor="middle">free: D4, D27, D30-D33</text>
+  <text x="730" y="818" class="s" text-anchor="middle">powered through the USB cable</text>
+  <text x="730" y="834" class="s" text-anchor="middle">(or VIN 7-12 V)</text>
+  <text x="680" y="854" class="pin" text-anchor="middle">5V</text>
+  <text x="780" y="854" class="pin" text-anchor="middle">GND</text>
+  <text x="600" y="880" class="s">5V → both HC-SR04 VCC (they draw ~15 mA each)</text>
+  <text x="600" y="896" class="s">GND → common ground</text>
+
+  <!-- drive relay module -->
+  <text x="300" y="268" class="t">4-ch relay module (drive)</text>
+  <rect x="300" y="276" width="180" height="164" class="box"/>
+  <text x="306" y="300" class="pin">COM1</text><text x="390" y="300" class="s" text-anchor="middle">L fwd</text><text x="474" y="300" class="pin" text-anchor="end">IN1</text>
+  <text x="306" y="340" class="pin">COM2</text><text x="390" y="340" class="s" text-anchor="middle">L back</text><text x="474" y="340" class="pin" text-anchor="end">IN2</text>
+  <text x="306" y="380" class="pin">COM3</text><text x="390" y="380" class="s" text-anchor="middle">R fwd</text><text x="474" y="380" class="pin" text-anchor="end">IN3</text>
+  <text x="306" y="420" class="pin">COM4</text><text x="390" y="420" class="s" text-anchor="middle">R back</text><text x="474" y="420" class="pin" text-anchor="end">IN4</text>
+  <path d="M480 296 H600" class="sig"/>
+  <path d="M480 336 H600" class="sig"/>
+  <path d="M480 376 H600" class="sig"/>
+  <path d="M480 416 H600" class="sig"/>
+  <text x="50" y="458" class="s">each relay: NO → +12 V, NC → battery -, COM → motor wire</text>
+  <text x="50" y="474" class="s">VCC / GND ← Buck A (5 V), not the Mega - active-LOW inputs</text>
+  <text x="50" y="490" class="s">relay off = wire grounded: no combination shorts the battery</text>
+
+  <!-- drive motors -->
+  <rect x="50" y="276" width="150" height="80" class="box"/>
+  <text x="60" y="298" class="t">Left motor</text>
+  <text x="60" y="316" class="s">back-left wheel</text>
+  <text x="60" y="334" class="s">12 V - relays 1 + 2</text>
+  <path d="M300 296 H200" class="mot"/>
+  <path d="M300 336 H200" class="mot"/>
+  <rect x="50" y="360" width="150" height="80" class="box"/>
+  <text x="60" y="382" class="t">Right motor</text>
+  <text x="60" y="400" class="s">front-right wheel</text>
+  <text x="60" y="418" class="s">12 V - relays 3 + 4</text>
+  <path d="M300 376 H200" class="mot"/>
+  <path d="M300 416 H200" class="mot"/>
+  <text x="50" y="520" class="s">A wheel spins the wrong way? Swap that motor's two wires.</text>
+
+  <!-- conveyor relay + motor -->
+  <text x="300" y="552" class="t">1-ch relay (conveyor)</text>
+  <rect x="300" y="560" width="180" height="80" class="box"/>
+  <text x="306" y="590" class="pin">COM</text>
+  <text x="306" y="620" class="pin">NO</text>
+  <text x="390" y="606" class="s" text-anchor="middle">active-LOW</text>
+  <text x="474" y="600" class="pin" text-anchor="end">IN</text>
+  <path d="M480 596 H600" class="sig"/>
+  <path d="M300 586 H262" class="vp"/>
+  <text x="258" y="590" class="s" text-anchor="end">+V</text>
+  <path d="M300 616 H200" class="mot"/>
+  <text x="300" y="658" class="s">VCC / GND ← Buck A (5 V)</text>
+  <text x="300" y="674" class="s">COM ← + of the conveyor supply, NO → motor +</text>
+  <rect x="50" y="560" width="150" height="80" class="box"/>
+  <text x="60" y="582" class="t">Conveyor motor</text>
+  <text x="60" y="600" class="s">belt, one direction</text>
+  <text x="60" y="618" class="s">+ ← relay NO</text>
+  <text x="60" y="634" class="s">- → battery -</text>
+
+  <!-- servos -->
+  <rect x="1000" y="278" width="220" height="44" class="box"/>
+  <text x="1012" y="297" class="t">Lift L - MG996R</text>
+  <text x="1012" y="314" class="s">arm pivot, left side</text>
+  <path d="M860 296 H1000" class="sig"/>
+  <rect x="1000" y="338" width="220" height="44" class="box"/>
+  <text x="1012" y="357" class="t">Lift R - MG996R</text>
+  <text x="1012" y="374" class="s">arm pivot, right side</text>
+  <path d="M860 356 H1000" class="sig"/>
+  <rect x="1000" y="398" width="220" height="44" class="box"/>
+  <text x="1012" y="417" class="t">Stretch - MG996R</text>
+  <text x="1012" y="434" class="s">extends / retracts the arm</text>
+  <path d="M860 416 H1000" class="sig"/>
+  <rect x="1000" y="458" width="220" height="44" class="box"/>
+  <text x="1012" y="477" class="t">Sort gate - MG996R</text>
+  <text x="1012" y="494" class="s">bio 40 deg / non-bio 140 deg</text>
+  <path d="M860 476 H1000" class="sig"/>
+  <rect x="1000" y="518" width="220" height="44" class="box"/>
+  <text x="1012" y="537" class="t">Camera pan - SG90</text>
+  <text x="1012" y="554" class="s">mast, home 90 deg, +/-45 deg</text>
+  <path d="M860 536 H1000" class="sig"/>
+  <!-- servo power bus -->
+  <path d="M1270 284 V980" class="vp"/>
+  <path d="M1290 304 V980" class="gnd"/>
+  <path d="M1220 288 H1270 M1220 348 H1270 M1220 408 H1270 M1220 468 H1270 M1220 528 H1270" class="vp"/>
+  <path d="M1220 312 H1290 M1220 372 H1290 M1220 432 H1290 M1220 492 H1290 M1220 552 H1290" class="gnd"/>
+  <text x="1304" y="300" class="t">servo power bus</text>
+  <text x="1304" y="318" class="s">red: V+ 5-6 V from Buck B</text>
+  <text x="1304" y="334" class="s">black: GND</text>
+  <text x="1304" y="352" class="warn">never the Mega's 5V pin:</text>
+  <text x="1304" y="368" class="warn">one MG996R stalls at ~2.5 A</text>
+
+  <!-- ultrasonic sensors -->
+  <rect x="1000" y="616" width="220" height="80" class="box"/>
+  <text x="1006" y="640" class="pin">TRIG</text>
+  <text x="1006" y="670" class="pin">ECHO</text>
+  <text x="1066" y="640" class="t">Left HC-SR04</text>
+  <text x="1066" y="658" class="s">faces left, angled forward</text>
+  <text x="1066" y="676" class="s">VCC ← Mega 5V, GND</text>
+  <path d="M860 636 H1000" class="sig"/>
+  <path d="M860 666 H1000" class="sig"/>
+  <rect x="1000" y="736" width="220" height="80" class="box"/>
+  <text x="1006" y="760" class="pin">TRIG</text>
+  <text x="1006" y="790" class="pin">ECHO</text>
+  <text x="1066" y="760" class="t">Right HC-SR04</text>
+  <text x="1066" y="778" class="s">faces right, angled forward</text>
+  <text x="1066" y="796" class="s">VCC ← Mega 5V, GND</text>
+  <path d="M860 756 H1000" class="sig"/>
+  <path d="M860 786 H1000" class="sig"/>
+
+  <!-- power -->
+  <line x1="20" y1="918" x2="1440" y2="918" stroke="#999" stroke-dasharray="6 4"/>
+  <text x="20" y="944" class="t">Power</text>
+  <rect x="40" y="958" width="190" height="84" class="pwr"/>
+  <text x="52" y="980" class="t">12 V battery</text>
+  <text x="52" y="998" class="s">drive + conveyor motors</text>
+  <text x="52" y="1014" class="s">put an inline fuse on +</text>
+  <text x="236" y="976" class="s">+</text>
+  <text x="236" y="1028" class="s">-</text>
+  <path d="M230 980 H300 V955 H1200 V980" class="vp"/>
+  <path d="M230 1020 H300 V1066 H1290" class="gnd"/>
+  <text x="310" y="948" class="s" fill="#d32f2f">+12 V → every drive relay NO contact, conveyor relay COM, and the three bucks</text>
+  <!-- buck A -->
+  <path d="M380 955 V980" class="vp"/>
+  <rect x="360" y="980" width="190" height="64" class="pwr"/>
+  <text x="372" y="1001" class="t">Buck A - 5 V</text>
+  <text x="372" y="1019" class="s">→ VCC of both relay modules</text>
+  <text x="372" y="1035" class="s">(~0.4 A for five coils)</text>
+  <path d="M455 1044 V1066" class="gnd"/>
+  <!-- buck C -->
+  <path d="M640 955 V980" class="vp"/>
+  <rect x="620" y="980" width="200" height="64" class="pwr"/>
+  <text x="632" y="1001" class="t">Buck C - 5 V, 3 A</text>
+  <text x="632" y="1019" class="s">→ Orange Pi barrel jack</text>
+  <text x="632" y="1035" class="s">its own buck: keeps the Pi stable</text>
+  <path d="M720 1044 V1066" class="gnd"/>
+  <!-- buck B -->
+  <rect x="1150" y="980" width="200" height="64" class="pwr"/>
+  <text x="1162" y="1001" class="t">Buck B - 5-6 V, 5 A+</text>
+  <text x="1162" y="1019" class="s">→ servo bus (4x MG996R</text>
+  <text x="1162" y="1035" class="s">+ SG90)</text>
+  <path d="M1250 1044 V1066" class="gnd"/>
+  <text x="20" y="1094" class="t">Common ground</text>
+  <text x="20" y="1112" class="s">Battery -, every buck -, Mega GND, both relay modules, all servos and both sensors must be joined. The USB cable joins the Pi's ground to the Mega's.</text>
+</svg>
