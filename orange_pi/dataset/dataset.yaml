@@ -1,0 +1,18 @@
+# RoboSort Dataset Configuration
+# Directory structure expected:
+#   dataset/
+#     images/
+#       train/   <- training images (.jpg/.png)
+#       val/     <- validation images
+#     labels/
+#       train/   <- YOLO-format .txt label files
+#       val/
+
+path: dataset          # root path (relative to train.py)
+train: images/train
+val:   images/val
+
+nc: 2                  # number of classes
+names:
+  0: bio               # biodegradable: food waste, paper, cardboard, leaves, wood
+  1: non_bio           # non-biodegradable: plastic, cans, glass, metal, styrofoam
