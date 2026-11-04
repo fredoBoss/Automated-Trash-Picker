@@ -12,15 +12,15 @@ static void relaySet(uint8_t pin, bool on) {
 }
 
 // One side. dir is +1 forward, -1 backward, 0 stop.
-static void sideWrite(uint8_t pinIn1, uint8_t pinIn2, uint8_t pinEn,
-                      int8_t dir, uint8_t speed) {
+static void sideWrite(bool left, int8_t dir, uint8_t speed) {
   if (DRIVE_BY_RELAY) {
-    relaySet(pinIn1, dir > 0);
-    relaySet(pinIn2, dir < 0);
+    relaySet(left ? PIN_L_IN1 : PIN_R_IN1, dir > 0);
+    relaySet(left ? PIN_L_IN2 : PIN_R_IN2, dir < 0);
   } else {
-    digitalWrite(pinIn1, dir > 0 ? HIGH : LOW);
-    digitalWrite(pinIn2, dir < 0 ? HIGH : LOW);
-    analogWrite(pinEn, dir == 0 ? 0 : speed);
+    // PWM on one input, the other held low. Both low is the stop: the
+    // BTS7960 then grounds both motor wires, which brakes the wheel.
+    analogWrite(left ? PIN_L_RPWM : PIN_R_RPWM, dir > 0 ? speed : 0);
+    analogWrite(left ? PIN_L_LPWM : PIN_R_LPWM, dir < 0 ? speed : 0);
   }
 }
 
@@ -35,13 +35,13 @@ static void drive(int8_t dirL, uint8_t speedL, int8_t dirR, uint8_t speedR) {
               (dirR != 0 && dirR == -lastDirR);
   uint32_t idle = millis() - lastPoweredMs;
   if (flip && idle < REVERSE_PAUSE_MS) {
-    sideWrite(PIN_L_IN1, PIN_L_IN2, PIN_L_EN, 0, 0);
-    sideWrite(PIN_R_IN1, PIN_R_IN2, PIN_R_EN, 0, 0);
+    sideWrite(true,  0, 0);
+    sideWrite(false, 0, 0);
     delay(REVERSE_PAUSE_MS - idle);
   }
 
-  sideWrite(PIN_L_IN1, PIN_L_IN2, PIN_L_EN, dirL, speedL);
-  sideWrite(PIN_R_IN1, PIN_R_IN2, PIN_R_EN, dirR, speedR);
+  sideWrite(true,  dirL, speedL);
+  sideWrite(false, dirR, speedR);
 
   if (dirL != 0) lastDirL = dirL;
   if (dirR != 0) lastDirR = dirR;
@@ -51,13 +51,21 @@ static void drive(int8_t dirL, uint8_t speedL, int8_t dirR, uint8_t speedR) {
 // Public API -------------------------------------------------------
 /*
  * Pins are written "stopped" before they become outputs, so no relay
- * clicks on at boot - the same trick as the conveyor relay. In L298N mode
- * analogWrite() makes the EN pins outputs itself.
+ * clicks on at boot - the same trick as the conveyor relay. With the
+ * BTS7960, analogWrite() makes the PWM pins outputs itself, and the
+ * boards are enabled only once those are held low.
  */
 void motorSetup() {
   driveStop();
-  const uint8_t pins[] = {PIN_L_IN1, PIN_L_IN2, PIN_R_IN1, PIN_R_IN2};
-  for (uint8_t i = 0; i < sizeof(pins); i++) pinMode(pins[i], OUTPUT);
+  if (DRIVE_BY_RELAY) {
+    const uint8_t pins[] = {PIN_L_IN1, PIN_L_IN2, PIN_R_IN1, PIN_R_IN2};
+    for (uint8_t i = 0; i < sizeof(pins); i++) pinMode(pins[i], OUTPUT);
+  } else {
+    pinMode(PIN_L_EN, OUTPUT);
+    pinMode(PIN_R_EN, OUTPUT);
+    digitalWrite(PIN_L_EN, HIGH);
+    digitalWrite(PIN_R_EN, HIGH);
+  }
 }
 
 void driveForward(uint8_t speed) {
