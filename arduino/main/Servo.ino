@@ -16,20 +16,19 @@ const uint16_t SERVO_MAX_US = 2500;
 
 // ------------------------------------------------------------- angles
 /*
- * The one reset angle, mid-travel on a 180 deg servo. It is also where the
- * library parks a channel on attach(), so nothing snaps to an unknown
- * position at boot, and it is the fixed point of the lift mirroring below
- * - 180 - 90 is 90, so the pair agrees on home whichever way it is wired.
+ * The reset angle for the gate and the camera, mid-travel on a 180 deg
+ * servo. It is also where the library parks a channel on attach(), so
+ * nothing snaps to an unknown position at boot.
  */
 const uint8_t SERVO_HOME = 90;
 
 /*
- * The lift only goes up and down, and down is home: the arm rests at 90,
- * where attach() parks it. Lower angle is up on this linkage, so up is
- * below 90 - 60 deg of travel, the same swing as the old 120 down / 60 up.
+ * The lift only goes up and down, and down is home. Higher angle is up on
+ * this linkage: the arm rests at 30 and lifts to 90 - 60 deg of travel,
+ * the same two angles as the old 90 down / 30 up, swapped.
  */
-const uint8_t LIFT_DOWN   = SERVO_HOME;   // 90, arm down - the rest position
-const uint8_t LIFT_UP     = 30;           // arm raised, item scooped up to the belt
+const uint8_t LIFT_DOWN   = 30;           // arm down - the rest position
+const uint8_t LIFT_UP     = 90;           // arm raised, item scooped up to the belt
 const uint8_t SORT_BIO    = 40;
 const uint8_t SORT_NONBIO = 140;
 
@@ -54,8 +53,9 @@ const uint8_t  LIFT_STEP_DEG  = 2;
 const uint8_t  LIFT_STEP_MS   = 15;
 const uint16_t LIFT_HOLD_MS   = 150;    // after the ramp, let the arm stop swinging
 
-// Last angle sent to the lift pair. attach() parks it at 90, so it starts there.
-uint8_t liftAngle = SERVO_HOME;
+// Last angle sent to the lift pair. servoSetup() loads LIFT_DOWN before
+// attach(), so it starts there.
+uint8_t liftAngle = LIFT_DOWN;
 
 /*
  * An SG90 is about 0.1 s per 60 deg, so the widest pan move (left to
@@ -67,12 +67,19 @@ uint8_t panAngle = PAN_HOME;          // last angle sent to the pan servo
 const uint16_t CONVEYOR_RUN_MS = 5000;  // belt time from the arm to the bin
 
 void servoSetup() {
-  // attach() starts a channel at 90, and 90 is every servo's rest angle -
-  // lift down, gate and camera centred - so none needs a pulse loaded first.
+  // attach() starts a channel at the pulse already loaded, 90 if none.
+  // That is the gate and camera's rest angle but the lift's up, so the
+  // lift is loaded with LIFT_DOWN first and the arm stays down at
+  // power-on instead of jumping up. Before attach() the library maps
+  // angles over its default 544-2400 us, a degree or two off, so
+  // liftWrite() sends the exact pulse once attached.
+  servoLiftL.write(LIFT_DOWN);
+  servoLiftR.write(LIFT_DOWN);
   servoLiftL.attach(PIN_SERVO_LIFT_L, SERVO_MIN_US, SERVO_MAX_US);
   servoLiftR.attach(PIN_SERVO_LIFT_R, SERVO_MIN_US, SERVO_MAX_US);
   servoSort.attach(PIN_SERVO_SORT,    SERVO_MIN_US, SERVO_MAX_US);
   servoPan.attach(PIN_SERVO_PAN,      SERVO_MIN_US, SERVO_MAX_US);
+  liftWrite(LIFT_DOWN);
 
   // Relay pin written to "off" before it becomes an output, so the belt
   // cannot twitch on for an instant at boot.
@@ -110,8 +117,8 @@ void liftMoveTo(uint8_t target) {
   delay(LIFT_HOLD_MS);
 }
 
-// Park every servo, gate and camera included, at its rest angle: 90 for
-// all of them, which leaves the arm down.
+// Park every servo, gate and camera included, at its rest angle: the arm
+// down, the gate and the camera at 90.
 void servoResetAll() {
   servoSort.write(SERVO_HOME);
   servoPan.write(PAN_HOME);
@@ -184,7 +191,7 @@ uint8_t cameraAngle() {
 
 /*
  * Bench check for the lift pair, called by hand from setup() - never from
- * loop(). Both horns should travel together and sit level at 90 (down).
+ * loop(). Both horns should travel together and sit level at 30 (down).
  * If they strain against each other while stopped, cut power and adjust
  * LIFT_R_TRIM; if one travels the wrong way, it is mounted backwards.
  */
