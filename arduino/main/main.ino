@@ -134,14 +134,26 @@ void loop() {
 
   // A fresh B/N means the camera is looking at trash - collect it.
   if (isCommandFresh() && (lastCommand == CMD_BIO || lastCommand == CMD_NONBIO)) {
+    char item = lastCommand;
     driveStop();
-    lcdPickup(lastCommand, F("pick up"));
+    // PICKUP and SORTED bracket the sequence. The Pi sends nothing in
+    // between, so the item on the arm or a flicker cannot start another.
+    Serial.print(F("PICKUP "));
+    Serial.print(classLabel(item));
+    Serial.println(F(" - arm up, belt, gate"));
+    lcdPickup(item, F("pick up"));
     runPickupSequence();
-    lcdPickup(lastCommand, F("sorting"));
-    sortTo(lastCommand);
-    // Consume the command so one detection triggers one pickup. The Pi
-    // sends on change, so it will re-send B/N for the next item.
+    lcdPickup(item, F("sorting"));
+    sortTo(item);
+    // Serial is not read during the sequence, so anything sent in it is
+    // still queued and would read as fresh now. Read it - a 5 still stops
+    // the rover - then drop whatever B/N it latched, so one detection is
+    // one pickup. Before SORTED, so anything after SORTED is new.
+    readSerialCommand();
     lastCommand = CMD_NONE;
+    Serial.print(F("SORTED "));
+    Serial.print(classLabel(item));
+    Serial.println(F(" - arm down, gate home"));
     return;
   }
 
@@ -473,6 +485,7 @@ void printHelp() {
   Serial.println(F("          B bio      N non-bio    X none"));
   Serial.println(F("          P heartbeat the Pi sends every second - no reply"));
   Serial.println(F("replies:  RX received, OK done, FAIL refused, DONE/STOP move ended"));
+  Serial.println(F("          PICKUP/SORTED a pickup started / its item is in the bin"));
 }
 
 bool isCommandFresh() {
