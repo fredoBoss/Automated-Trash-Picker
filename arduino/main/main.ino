@@ -1,18 +1,31 @@
 
 
 #include <Servo.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
 
 
-const bool DRIVE_BY_RELAY = true;
+// Drive motors: false = two BTS7960 (IBT-2) boards, one per motor, with
+// PWM speed; true = the 4-ch relay module, on/off only.
+const bool DRIVE_BY_RELAY = false;
 
 const bool DRIVE_RELAY_ACTIVE_LOW = true;
 
-const uint8_t PIN_L_IN1  = 22;  // IN1 - forward    board 1 IN1
-const uint8_t PIN_L_IN2  = 23;  // IN2 - backward   board 1 IN2
-const uint8_t PIN_R_IN1  = 24;  // IN3 - forward    board 2 IN1
-const uint8_t PIN_R_IN2  = 25;  // IN4 - backward   board 2 IN2
-const uint8_t PIN_L_EN   = 2;   // unused           board 1 ENA (PWM)
-const uint8_t PIN_R_EN   = 3;   // unused           board 2 ENA (PWM)
+// Relay module - DRIVE_BY_RELAY = true
+const uint8_t PIN_L_IN1  = 22;  // IN1 - left forward
+const uint8_t PIN_L_IN2  = 23;  // IN2 - left backward
+const uint8_t PIN_R_IN1  = 24;  // IN3 - right forward
+const uint8_t PIN_R_IN2  = 25;  // IN4 - right backward
+
+// BTS7960 boards - DRIVE_BY_RELAY = false. RPWM/LPWM need PWM pins, and
+// not 44-46: the Servo library takes their timer. Each board's R_EN and
+// L_EN are jumpered together onto one EN pin.
+const uint8_t PIN_L_RPWM = 2;   // forward PWM      board 1 (left)  RPWM
+const uint8_t PIN_L_LPWM = 3;   // backward PWM     board 1 (left)  LPWM
+const uint8_t PIN_R_RPWM = 5;   // forward PWM      board 2 (right) RPWM
+const uint8_t PIN_R_LPWM = 6;   // backward PWM     board 2 (right) LPWM
+const uint8_t PIN_L_EN   = 30;  // enable           board 1 R_EN + L_EN
+const uint8_t PIN_R_EN   = 31;  // enable           board 2 R_EN + L_EN
 
 
 const uint8_t PIN_CONV_RELAY        = 26;
@@ -29,9 +42,11 @@ const uint8_t PIN_SERVO_PAN     = 11;
 const uint8_t PIN_TRIG[2] = {36, 34};
 const uint8_t PIN_ECHO[2] = {37, 35};
 
+// Status LCD: I2C on the Mega's fixed SDA 20 / SCL 21 - see Lcd.ino.
+
 // ------------------------------------------------------------- tuning
-// Speeds are PWM for the L298N. Relays have no speed: 0 is stop and
-// anything else is full battery voltage.
+// Speeds are PWM duty for the BTS7960. Relays have no speed: 0 is stop
+// and anything else is full battery voltage.
 const uint8_t  DRIVE_SPEED   = 160;   // 0-255 cruise
 const uint8_t  TURN_SPEED    = 180;
 const uint16_t AVOID_CM      = 60;    // AUTO: a side closer than this -> turn away from it
@@ -43,10 +58,13 @@ const uint16_t INIT_MS       = 10000; // after setup: motors held stopped, then 
 const uint32_t CMD_TIMEOUT_MS = 5000; // Pi silence before we assume no target
 
 // ------------------------------------------------------------- state
-enum Command { CMD_NONE = 'X', CMD_BIO = 'B', CMD_NONBIO = 'N' };
+enum Command { CMD_NONE = 'X', CMD_BIO = 'B', CMD_NONBIO = 'N', CMD_PING = 'P' };
 
 char     lastCommand   = CMD_NONE;
 uint32_t lastCommandAt = 0;
+char     lastSeen      = CMD_NONE; // last B/N/X from the Pi, never consumed - for the LCD
+bool     piHeard       = false;    // any line from the Pi since boot
+uint32_t piHeardAt     = 0;        // when the latest one arrived
 bool     pickupBusy    = false;   // true while the arm sequence is running
 bool     manualMode    = true;    // stopped until the init countdown ends or 'A'
 char     manualMove    = 0;       // drive command running: '8' '2' '4' '6', 0 = none
@@ -62,16 +80,28 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);   // heartbeat, see heartbeat()
 
   motorSetup();
+  lcdSetup();                     // early, so the screen is up while the servos home
   servoSetup();
   ultrasonicSetup();
 
   Serial.println(F("RoboSort Mega ready"));
   printHelp();
-  Serial.println(F("INIT drive  - relays off, wheels stopped"));
-  Serial.println(F("INIT arm    - lift and sort servos at 90, arm down"));
+  Serial.println(DRIVE_BY_RELAY ? F("INIT drive  - relays off, wheels stopped")
+                                : F("INIT drive  - BTS7960 enabled, wheels braked"));
+  Serial.println(F("INIT arm    - lift at 30, arm down; sort gate at 90"));
   Serial.println(F("INIT camera - pan servo at 90, looking straight ahead"));
   Serial.println(F("INIT belt   - conveyor off"));
-  printSensorCheck();
+  printLcdCheck();
+
+  // The same checks on the LCD, a line each. Only the sonars can answer
+  // back - relays and servos have no feedback - so the other lines say
+  // what was set, not what was confirmed.
+  lcdRow(0, F("Checking parts"));
+  lcdCheck(F("Drive"),  F("off"),   true);
+  lcdCheck(F("Belt"),   F("off"),   true);
+  lcdCheck(F("Servos"), F("home"),  true);
+  lcdCheck(F("Camera"), F("ahead"), true);
+  printSensorCheck();             // pings both sonars, adds their LCD lines
   Serial.print(F("INIT - driving starts in "));
   Serial.print(INIT_MS / 1000);
   Serial.println(F(" s. Any drive/arm/camera command cancels it; A starts now."));
@@ -82,6 +112,7 @@ void loop() {
   heartbeat();
   readSerialCommand();
   serviceAutoStart();
+  lcdService();
 
   // Manual: nothing below runs, so a manual move is not undone by the
   // navigation logic. Only a drive command in progress needs watching.
@@ -104,7 +135,9 @@ void loop() {
   // A fresh B/N means the camera is looking at trash - collect it.
   if (isCommandFresh() && (lastCommand == CMD_BIO || lastCommand == CMD_NONBIO)) {
     driveStop();
+    lcdPickup(lastCommand, F("pick up"));
     runPickupSequence();
+    lcdPickup(lastCommand, F("sorting"));
     sortTo(lastCommand);
     // Consume the command so one detection triggers one pickup. The Pi
     // sends on change, so it will re-send B/N for the next item.
@@ -112,6 +145,7 @@ void loop() {
     return;
   }
 
+  lcdRow(0, F("AUTO driving"));
   driveForward(DRIVE_SPEED);
 }
 
@@ -164,7 +198,16 @@ void readSerialCommand() {
 
 void endLine() {
   rxLine[rxLen] = '\0';
-  if (rxLen > 0 || rxTooLong) {
+  bool gotLine = rxLen > 0 || rxTooLong;
+  // P is the Pi's once-a-second heartbeat. It only marks the Pi as alive,
+  // so it is not echoed - RX P every second would bury every other line.
+  bool ping = !rxTooLong && rxLen == 1 && rxLine[0] == CMD_PING;
+
+  if (gotLine) {
+    piHeard   = true;             // anything at all from the Pi counts
+    piHeardAt = millis();
+  }
+  if (gotLine && !ping) {
     Serial.print(F("RX "));
     Serial.print(rxLine);
     if (rxTooLong) Serial.print(F("..."));
@@ -174,7 +217,7 @@ void endLine() {
 
   if (rxTooLong) {
     Serial.println(F("FAIL - too long, not a command (send ? for the list)"));
-  } else if (rxLen > 0) {
+  } else if (rxLen > 0 && !ping) {
     runCommand(rxLine);
   }
   rxLen     = 0;
@@ -204,6 +247,7 @@ void runCommand(const char *line) {
     case CMD_NONE:
       lastCommand   = c;
       lastCommandAt = millis();
+      lastSeen      = c;
       Serial.print(F("OK "));
       if (c == CMD_BIO)         Serial.print(F("bio"));
       else if (c == CMD_NONBIO) Serial.print(F("non-bio"));
@@ -219,19 +263,20 @@ void runCommand(const char *line) {
     case '6':
       manualDrive(c);
       break;
-    case '5': enterManual(); conveyorStop(); ok(F("stop - wheels and conveyor stopped")); break;
+    case '5': enterManual(); conveyorStop(); lcdRow(0, F("MANUAL stopped")); ok(F("stop - wheels and conveyor stopped")); break;
 
-    // Manual movement tests. Each blocks until the joint has settled.
-    case 'U': enterManual(); armLiftUp();     ok(F("lift up"));                 break;
-    case 'D': enterManual(); armLiftDown();   ok(F("lift down"));               break;
-    case 'H': enterManual(); servoResetAll(); ok(F("home - servos at 90, arm down")); break;
-    case 'C': enterManual(); conveyorRun();   ok(F("conveyor on"));             break;
-    case 'O': enterManual(); conveyorStop();  ok(F("conveyor off"));            break;
+    // Manual movement tests. Each blocks until the joint has settled, so
+    // the LCD is set first and shows the move while it runs.
+    case 'U': enterManual(); lcdRow(0, F("MANUAL lift up"));   armLiftUp();     ok(F("lift up"));      break;
+    case 'D': enterManual(); lcdRow(0, F("MANUAL lift down")); armLiftDown();   ok(F("lift down"));    break;
+    case 'H': enterManual(); lcdRow(0, F("MANUAL home"));      servoResetAll(); ok(F("home - arm down, gate and camera at 90")); break;
+    case 'C': enterManual(); lcdRow(0, F("MANUAL belt on"));   conveyorRun();   ok(F("conveyor on"));  break;
+    case 'O': enterManual(); lcdRow(0, F("MANUAL belt off"));  conveyorStop();  ok(F("conveyor off")); break;
 
     // Camera pan, 45 deg either side of straight ahead.
-    case '7': enterManual(); cameraLookLeft();  ok(F("look left - camera 45 deg left"));   break;
-    case '9': enterManual(); cameraLookRight(); ok(F("look right - camera 45 deg right")); break;
-    case '0': enterManual(); cameraLookAhead(); ok(F("look ahead - camera at 90"));        break;
+    case '7': enterManual(); lcdRow(0, F("MANUAL cam left"));  cameraLookLeft();  ok(F("look left - camera 45 deg left"));   break;
+    case '9': enterManual(); lcdRow(0, F("MANUAL cam right")); cameraLookRight(); ok(F("look right - camera 45 deg right")); break;
+    case '0': enterManual(); lcdRow(0, F("MANUAL cam ahead")); cameraLookAhead(); ok(F("look ahead - camera at 90"));        break;
 
     case 'A': resumeAuto(); ok(F("autonomous - driving on its own, send 5 to stop")); break;
     case '?': printHelp(); printStatus(); break;
@@ -269,16 +314,17 @@ void manualDrive(char move) {
   if (move == '8' && sideBlocked()) {
     driveStop();
     manualMove = 0;
+    lcdRow(0, F("MANUAL blocked"));
     Serial.print(F("FAIL forward - "));
     printBlocked();
     return;
   }
 
   switch (move) {
-    case '8': driveForward(DRIVE_SPEED);  break;
-    case '2': driveBackward(DRIVE_SPEED); break;
-    case '4': driveTurnLeft(TURN_SPEED);  break;
-    case '6': driveTurnRight(TURN_SPEED); break;
+    case '8': lcdRow(0, F("MANUAL forward"));  driveForward(DRIVE_SPEED);  break;
+    case '2': lcdRow(0, F("MANUAL backward")); driveBackward(DRIVE_SPEED); break;
+    case '4': lcdRow(0, F("MANUAL turn L"));   driveTurnLeft(TURN_SPEED);  break;
+    case '6': lcdRow(0, F("MANUAL turn R"));   driveTurnRight(TURN_SPEED); break;
   }
   manualMove   = move;
   manualMoveAt = millis();   // after drive(), which may pause before a reversal
@@ -306,6 +352,7 @@ void serviceManualMove() {
 
   if (millis() - manualMoveAt >= MANUAL_MOVE_MS) {
     driveStop();
+    lcdRow(0, F("MANUAL stopped"));
     Serial.print(F("DONE "));
     Serial.print(moveName(manualMove));
     Serial.println(F(" - time up, send it again to keep going"));
@@ -313,6 +360,7 @@ void serviceManualMove() {
   } else if (manualMove == '8' && sideBlocked()) {
     driveStop();
     manualMove = 0;
+    lcdRow(0, F("MANUAL blocked"));
     Serial.print(F("STOP forward - "));
     printBlocked();
   }
@@ -399,6 +447,7 @@ void serviceAutoStart() {
   }
 
   uint8_t left = (INIT_MS - elapsed + 999) / 1000;   // whole seconds, rounded up
+  lcdCountdown(left);
   if (left != shown && left < INIT_MS / 1000) {
     shown = left;
     Serial.print(F("INIT - driving in "));
@@ -422,6 +471,7 @@ void printHelp() {
   Serial.println(F("          H home     C conveyor on  O conveyor off"));
   Serial.println(F("          A autonomous  ? this list + status"));
   Serial.println(F("          B bio      N non-bio    X none"));
+  Serial.println(F("          P heartbeat the Pi sends every second - no reply"));
   Serial.println(F("replies:  RX received, OK done, FAIL refused, DONE/STOP move ended"));
 }
 
@@ -447,6 +497,7 @@ void avoidObstacle() {
   bool turnLeft;
 
   if (distLeft < AVOID_CM && distRight < AVOID_CM) {
+    lcdRow(0, F("AVOID backing up"));
     driveBackward(DRIVE_SPEED);
     delay(BACKUP_MS);
     driveStop();
@@ -461,6 +512,7 @@ void avoidObstacle() {
   Serial.print(F(" cm, right "));
   Serial.print(distRight);
   Serial.println(turnLeft ? F(" cm -> turn left") : F(" cm -> turn right"));
+  lcdRow(0, turnLeft ? F("AVOID turn left") : F("AVOID turn right"));
 
   if (turnLeft) {
     driveTurnLeft(TURN_SPEED);
@@ -472,6 +524,7 @@ void avoidObstacle() {
   while (millis() - start < TURN_MS) {
     heartbeat();
     readSerialCommand();
+    lcdService();
     if (manualMode) return;   // a command took over and has already stopped the wheels
     delay(1);
   }
