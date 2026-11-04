@@ -42,19 +42,65 @@ void readAllDistances() {
   distRight = readDistance(IDX_RIGHT);
 }
 
-// Start-up report, one reading per sensor. MAX_RANGE_CM means no echo came
-// back: nothing within ~2 m, or the sensor is not connected.
-void printSensorCheck() {
-  readAllDistances();
-  Serial.print(F("INIT sensors - left "));
-  Serial.print(distLeft);
-  Serial.print(F(" cm, right "));
-  Serial.print(distRight);
-  Serial.print(F(" cm"));
-  if (distLeft == MAX_RANGE_CM || distRight == MAX_RANGE_CM) {
-    Serial.print(F(" ("));
-    Serial.print(MAX_RANGE_CM);
-    Serial.print(F(" = no echo: nothing within 2 m, or not connected)"));
+/*
+ * Is a sensor wired to this pair at all? readDistance() cannot say - an
+ * unplugged sensor and an empty room both come back as MAX_RANGE_CM, and
+ * a side that always reads far is a side the rover drives into. A wired
+ * HC-SR04 holds ECHO low between pings and raises it within a millisecond
+ * or two of a trigger, whatever is in front of it. The pull-up makes an
+ * unplugged ECHO pin read high instead of floating, so it cannot pass the
+ * first test by chance.
+ */
+bool sonarPresent(uint8_t index) {
+  uint8_t echo = PIN_ECHO[index];
+  pinMode(echo, INPUT_PULLUP);
+  delayMicroseconds(100);
+  bool present = digitalRead(echo) == LOW;
+
+  if (present) {
+    digitalWrite(PIN_TRIG[index], HIGH);
+    delayMicroseconds(10);
+    digitalWrite(PIN_TRIG[index], LOW);
+
+    uint32_t start = micros();
+    while (digitalRead(echo) == LOW) {
+      if (micros() - start > 5000) {
+        present = false;
+        break;
+      }
+    }
+    // Let this ping run out - ~40 ms with nothing in range - so the next
+    // reading does not start on its tail.
+    start = millis();
+    while (digitalRead(echo) == HIGH && millis() - start < 250) {}
   }
+
+  pinMode(echo, INPUT);
+  return present;
+}
+
+static void printSonar(bool present, uint16_t cm) {
+  if (!present) {
+    Serial.print(F("NOT CONNECTED"));
+    return;
+  }
+  Serial.print(cm);
+  Serial.print(cm == MAX_RANGE_CM ? F(" cm (no echo - nothing within 2 m)") : F(" cm"));
+}
+
+// Start-up report: is each sensor there, and what does it read. One serial
+// line for both, one LCD line each.
+void printSensorCheck() {
+  bool okLeft  = sonarPresent(IDX_LEFT);
+  bool okRight = sonarPresent(IDX_RIGHT);
+  readAllDistances();
+
+  Serial.print(F("INIT sensors - left "));
+  printSonar(okLeft, distLeft);
+  Serial.print(F(", right "));
+  printSonar(okRight, distRight);
   Serial.println();
+
+  lcdCheck(F("Sonar L"), okLeft  ? F("OK") : F("MISSING"), okLeft);
+  lcdCheck(F("Sonar R"), okRight ? F("OK") : F("MISSING"), okRight);
 }
