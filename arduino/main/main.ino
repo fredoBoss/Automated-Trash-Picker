@@ -5,27 +5,13 @@
 #include <LiquidCrystal_I2C.h>
 
 
-// Drive motors: false = two BTS7960 (IBT-2) boards, one per motor, with
-// PWM speed; true = the 4-ch relay module, on/off only.
-const bool DRIVE_BY_RELAY = false;
-
+// Drive motors: a 4-ch relay module, two relays per motor, on/off only.
 const bool DRIVE_RELAY_ACTIVE_LOW = true;
 
-// Relay module - DRIVE_BY_RELAY = true
 const uint8_t PIN_L_IN1  = 22;  // IN1 - left forward
 const uint8_t PIN_L_IN2  = 23;  // IN2 - left backward
 const uint8_t PIN_R_IN1  = 24;  // IN3 - right forward
 const uint8_t PIN_R_IN2  = 25;  // IN4 - right backward
-
-// BTS7960 boards - DRIVE_BY_RELAY = false. RPWM/LPWM need PWM pins, and
-// not 44-46: the Servo library takes their timer. Each board's R_EN and
-// L_EN are jumpered together onto one EN pin.
-const uint8_t PIN_L_RPWM = 2;   // forward PWM      board 1 (left)  RPWM
-const uint8_t PIN_L_LPWM = 3;   // backward PWM     board 1 (left)  LPWM
-const uint8_t PIN_R_RPWM = 5;   // forward PWM      board 2 (right) RPWM
-const uint8_t PIN_R_LPWM = 6;   // backward PWM     board 2 (right) LPWM
-const uint8_t PIN_L_EN   = 30;  // enable           board 1 R_EN + L_EN
-const uint8_t PIN_R_EN   = 31;  // enable           board 2 R_EN + L_EN
 
 
 const uint8_t PIN_CONV_RELAY        = 26;
@@ -42,13 +28,14 @@ const uint8_t PIN_SERVO_PAN     = 11;
 const uint8_t PIN_TRIG[2] = {36, 34};
 const uint8_t PIN_ECHO[2] = {37, 35};
 
+// Start/stop push button to GND. No resistor: the internal pull-up holds
+// the pin high, so with nothing wired it reads as never pressed.
+const uint8_t PIN_START_STOP = 32;
+
 // Status LCD: I2C on the Mega's fixed SDA 20 / SCL 21 - see Lcd.ino.
 
 // ------------------------------------------------------------- tuning
-// Speeds are PWM duty for the BTS7960. Relays have no speed: 0 is stop
-// and anything else is full battery voltage.
-const uint8_t  DRIVE_SPEED   = 160;   // 0-255 cruise
-const uint8_t  TURN_SPEED    = 180;
+// Relays have no speed control: every move is full battery voltage.
 const uint16_t AVOID_CM      = 60;    // AUTO: a side closer than this -> turn away from it
 const uint16_t STOP_CM       = 20;    // MANUAL: forward refused / cut short closer than this
 const uint16_t BACKUP_MS     = 300;   // both sides blocked: back out first - blind, no rear sensor
@@ -78,6 +65,7 @@ void setup() {
   Serial.begin(9600);             // to the Orange Pi (USB / UART0)
 
   pinMode(LED_BUILTIN, OUTPUT);   // heartbeat, see heartbeat()
+  pinMode(PIN_START_STOP, INPUT_PULLUP);
 
   motorSetup();
   lcdSetup();                     // early, so the screen is up while the servos home
@@ -86,8 +74,7 @@ void setup() {
 
   Serial.println(F("RoboSort Mega ready"));
   printHelp();
-  Serial.println(DRIVE_BY_RELAY ? F("INIT drive  - relays off, wheels stopped")
-                                : F("INIT drive  - BTS7960 enabled, wheels braked"));
+  Serial.println(F("INIT drive  - relays off, wheels stopped"));
   Serial.println(F("INIT arm    - lift at 30, arm down; sort gate at 90"));
   Serial.println(F("INIT camera - pan servo at 90, looking straight ahead"));
   Serial.println(F("INIT belt   - conveyor off"));
@@ -111,6 +98,7 @@ void setup() {
 void loop() {
   heartbeat();
   readSerialCommand();
+  serviceStartStop();
   serviceAutoStart();
   lcdService();
 
@@ -158,7 +146,7 @@ void loop() {
   }
 
   lcdRow(0, F("AUTO driving"));
-  driveForward(DRIVE_SPEED);
+  driveForward();
 }
 
 /*
@@ -172,6 +160,37 @@ void heartbeat() {
   if (millis() - lastToggle >= 250) {
     lastToggle = millis();
     digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+  }
+}
+
+/*
+ * The start/stop button runs the same 5 and A as the serial commands, so
+ * the Pi hears the same replies and re-sends its command when AUTO starts.
+ * A press starts the rover only if nothing is moving or counting down;
+ * otherwise it stops it, and a countdown is cancelled like with 5.
+ * A press must still be there on a later read BUTTON_HOLD_MS on, so one
+ * noisy read from the motors nearby cannot start the rover.
+ */
+const uint8_t BUTTON_HOLD_MS = 30;
+
+void serviceStartStop() {
+  static bool     level    = HIGH;    // accepted level, HIGH = not pressed
+  static bool     changing = false;   // the pin currently differs from level
+  static uint32_t changeAt = 0;       // when it started to
+
+  bool reading = digitalRead(PIN_START_STOP);
+  if (reading == level) {
+    changing = false;
+  } else if (!changing) {
+    changing = true;
+    changeAt = millis();
+  } else if (millis() - changeAt >= BUTTON_HOLD_MS) {
+    level    = reading;
+    changing = false;
+    if (level == LOW) {
+      bool stopped = manualMode && !autoStartPending && manualMove == 0;
+      runCommand(stopped ? "A" : "5");
+    }
   }
 }
 
@@ -333,10 +352,10 @@ void manualDrive(char move) {
   }
 
   switch (move) {
-    case '8': lcdRow(0, F("MANUAL forward"));  driveForward(DRIVE_SPEED);  break;
-    case '2': lcdRow(0, F("MANUAL backward")); driveBackward(DRIVE_SPEED); break;
-    case '4': lcdRow(0, F("MANUAL turn L"));   driveTurnLeft(TURN_SPEED);  break;
-    case '6': lcdRow(0, F("MANUAL turn R"));   driveTurnRight(TURN_SPEED); break;
+    case '8': lcdRow(0, F("MANUAL forward"));  driveForward();   break;
+    case '2': lcdRow(0, F("MANUAL backward")); driveBackward();  break;
+    case '4': lcdRow(0, F("MANUAL turn L"));   driveTurnLeft();  break;
+    case '6': lcdRow(0, F("MANUAL turn R"));   driveTurnRight(); break;
   }
   manualMove   = move;
   manualMoveAt = millis();   // after drive(), which may pause before a reversal
@@ -484,6 +503,7 @@ void printHelp() {
   Serial.println(F("          A autonomous  ? this list + status"));
   Serial.println(F("          B bio      N non-bio    X none"));
   Serial.println(F("          P heartbeat the Pi sends every second - no reply"));
+  Serial.println(F("          button on D32: stops like 5, starts like A"));
   Serial.println(F("replies:  RX received, OK done, FAIL refused, DONE/STOP move ended"));
   Serial.println(F("          PICKUP/SORTED a pickup started / its item is in the bin"));
 }
@@ -502,16 +522,16 @@ bool isCommandFresh() {
  *                       has more room
  * A turn is a spin in place for TURN_MS. The next loop reads the sensors
  * again, so a turn that was not enough is simply followed by another.
- * The back-up blocks, but the turn is long, so it keeps the heartbeat and
- * the serial commands going: a 5 sent mid-turn stops the rover at once,
- * not TURN_MS later.
+ * The back-up blocks, but the turn is long, so it keeps the heartbeat, the
+ * serial commands and the button going: a 5 or a press mid-turn stops the
+ * rover at once, not TURN_MS later.
  */
 void avoidObstacle() {
   bool turnLeft;
 
   if (distLeft < AVOID_CM && distRight < AVOID_CM) {
     lcdRow(0, F("AVOID backing up"));
-    driveBackward(DRIVE_SPEED);
+    driveBackward();
     delay(BACKUP_MS);
     driveStop();
     readAllDistances();
@@ -528,15 +548,16 @@ void avoidObstacle() {
   lcdRow(0, turnLeft ? F("AVOID turn left") : F("AVOID turn right"));
 
   if (turnLeft) {
-    driveTurnLeft(TURN_SPEED);
+    driveTurnLeft();
   } else {
-    driveTurnRight(TURN_SPEED);
+    driveTurnRight();
   }
 
   uint32_t start = millis();
   while (millis() - start < TURN_MS) {
     heartbeat();
     readSerialCommand();
+    serviceStartStop();
     lcdService();
     if (manualMode) return;   // a command took over and has already stopped the wheels
     delay(1);
