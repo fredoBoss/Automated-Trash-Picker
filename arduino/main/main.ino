@@ -1,5 +1,4 @@
 
-
 #include <Servo.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
@@ -27,10 +26,6 @@ const uint8_t PIN_SERVO_PAN     = 11;
 
 const uint8_t PIN_TRIG[2] = {36, 34};
 const uint8_t PIN_ECHO[2] = {37, 35};
-
-// Start/stop push button to GND. No resistor: the internal pull-up holds
-// the pin high, so with nothing wired it reads as never pressed.
-const uint8_t PIN_START_STOP = 32;
 
 // Status LCD: I2C on the Mega's fixed SDA 20 / SCL 21 - see Lcd.ino.
 
@@ -65,7 +60,6 @@ void setup() {
   Serial.begin(9600);             // to the Orange Pi (USB / UART0)
 
   pinMode(LED_BUILTIN, OUTPUT);   // heartbeat, see heartbeat()
-  pinMode(PIN_START_STOP, INPUT_PULLUP);
 
   motorSetup();
   lcdSetup();                     // early, so the screen is up while the servos home
@@ -98,7 +92,6 @@ void setup() {
 void loop() {
   heartbeat();
   readSerialCommand();
-  serviceStartStop();
   serviceAutoStart();
   lcdService();
 
@@ -160,37 +153,6 @@ void heartbeat() {
   if (millis() - lastToggle >= 250) {
     lastToggle = millis();
     digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-  }
-}
-
-/*
- * The start/stop button runs the same 5 and A as the serial commands, so
- * the Pi hears the same replies and re-sends its command when AUTO starts.
- * A press starts the rover only if nothing is moving or counting down;
- * otherwise it stops it, and a countdown is cancelled like with 5.
- * A press must still be there on a later read BUTTON_HOLD_MS on, so one
- * noisy read from the motors nearby cannot start the rover.
- */
-const uint8_t BUTTON_HOLD_MS = 30;
-
-void serviceStartStop() {
-  static bool     level    = HIGH;    // accepted level, HIGH = not pressed
-  static bool     changing = false;   // the pin currently differs from level
-  static uint32_t changeAt = 0;       // when it started to
-
-  bool reading = digitalRead(PIN_START_STOP);
-  if (reading == level) {
-    changing = false;
-  } else if (!changing) {
-    changing = true;
-    changeAt = millis();
-  } else if (millis() - changeAt >= BUTTON_HOLD_MS) {
-    level    = reading;
-    changing = false;
-    if (level == LOW) {
-      bool stopped = manualMode && !autoStartPending && manualMove == 0;
-      runCommand(stopped ? "A" : "5");
-    }
   }
 }
 
@@ -503,7 +465,6 @@ void printHelp() {
   Serial.println(F("          A autonomous  ? this list + status"));
   Serial.println(F("          B bio      N non-bio    X none"));
   Serial.println(F("          P heartbeat the Pi sends every second - no reply"));
-  Serial.println(F("          button on D32: stops like 5, starts like A"));
   Serial.println(F("replies:  RX received, OK done, FAIL refused, DONE/STOP move ended"));
   Serial.println(F("          PICKUP/SORTED a pickup started / its item is in the bin"));
 }
@@ -522,9 +483,9 @@ bool isCommandFresh() {
  *                       has more room
  * A turn is a spin in place for TURN_MS. The next loop reads the sensors
  * again, so a turn that was not enough is simply followed by another.
- * The back-up blocks, but the turn is long, so it keeps the heartbeat, the
- * serial commands and the button going: a 5 or a press mid-turn stops the
- * rover at once, not TURN_MS later.
+ * The back-up blocks, but the turn is long, so it keeps the heartbeat and
+ * the serial commands going: a 5 sent mid-turn stops the rover at once,
+ * not TURN_MS later.
  */
 void avoidObstacle() {
   bool turnLeft;
@@ -557,7 +518,6 @@ void avoidObstacle() {
   while (millis() - start < TURN_MS) {
     heartbeat();
     readSerialCommand();
-    serviceStartStop();
     lcdService();
     if (manualMode) return;   // a command took over and has already stopped the wheels
     delay(1);
