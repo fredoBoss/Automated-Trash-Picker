@@ -5,7 +5,14 @@ const uint8_t IDX_RIGHT = 1;
 
 const uint32_t ECHO_TIMEOUT_US = 12000;   // ~2 m of round trip
 const uint16_t MAX_RANGE_CM    = 200;
-const uint8_t  SONAR_GAP_MS    = 10;      // between sensors, so one does not hear the other's ping
+
+// From one ping to the next, whichever sensor sends it. pulseIn() gives up
+// at 12 ms, but the echo off a wall 2-4 m away is still in the air until
+// ~23 ms, and a ping sent into it reads that stray echo as something close.
+// Alternating, each sensor then pings every 60 ms - the HC-SR04's own
+// minimum cycle.
+const uint8_t  PING_GAP_MS     = 30;
+static uint32_t lastPingAt     = 0;       // millis() of the last ping, either sensor
 
 void ultrasonicSetup() {
   for (uint8_t i = 0; i < sizeof(PIN_TRIG); i++) {
@@ -22,6 +29,9 @@ void ultrasonicSetup() {
  * imminent collision and lock the rover up.
  */
 uint16_t readDistance(uint8_t index) {
+  while (millis() - lastPingAt < PING_GAP_MS) {}
+  lastPingAt = millis();
+
   digitalWrite(PIN_TRIG[index], LOW);
   delayMicroseconds(2);
   digitalWrite(PIN_TRIG[index], HIGH);
@@ -36,9 +46,10 @@ uint16_t readDistance(uint8_t index) {
   return cm;
 }
 
+// readDistance() spaces the pings, so the right sensor's echo has died out
+// before the next call's left ping too - not only between left and right.
 void readAllDistances() {
   distLeft  = readDistance(IDX_LEFT);
-  delay(SONAR_GAP_MS);
   distRight = readDistance(IDX_RIGHT);
 }
 
