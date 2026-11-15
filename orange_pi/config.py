@@ -61,12 +61,16 @@ class Config:
     infer_size: int          # long side fed to the model; 0 = camera native
     serial_retries: int
     pickup_zone: tuple | None    # (x1, y1, x2, y2) fractions of the frame; None = off
+    grab_spot: tuple | None      # the same, where B/N goes out; None = anywhere in the zone
     threads: int             # CPU cores the model may use; 0 = all of them
     max_temp: float          # CPU deg C at which vision.py pauses; 0 = never
 
     def describe(self) -> str:
-        zone = (",".join(f"{v:.2f}" for v in self.pickup_zone)
-                if self.pickup_zone else "off")
+        def fmt(z):
+            return ",".join(f"{v:.2f}" for v in z) if z else "off"
+        zone = fmt(self.pickup_zone)
+        if self.pickup_zone:
+            zone += f"  grab={fmt(self.grab_spot)}"
         return (
             f"profile={self.profile}  camera={self.camera}  "
             f"serial={self.serial_port}@{self.baud_rate}  "
@@ -77,30 +81,39 @@ class Config:
         )
 
 
-# Where trash must be in the frame for B/N to go out, as (x1, y1, x2, y2)
-# fractions of the frame. Drawn on a 640x480 frame of the rover's own camera
-# (2026-11-15): the floor ahead of the scoop, x 143-464, y 227-415. The Mega
-# stops and lifts the arm the moment B/N arrives - it does not drive up to
-# the item - so trash in the top part of this zone is still ahead of the
-# scoop when the arm comes up. The grab spot alone, the zone before, was
-# (0.36, 0.84, 0.55, 0.93). Only valid while the camera mount does not move -
-# re-measure after touching the mast or the camera's tilt.
-PICKUP_ZONE = (0.22, 0.47, 0.73, 0.87)
+# Both as (x1, y1, x2, y2) fractions of the frame. Only valid while the
+# camera mount does not move - re-measure after touching the mast or the
+# camera's tilt, and keep the camera panned straight ahead.
+#
+# PICKUP_ZONE: trash in here gets collected. Drawn on a 640x480 frame of the
+# rover's own camera (2026-11-15): all the floor in view, edge to edge, from
+# just under the top of the frame (y 38) down to the scoop (y 414). Trash in
+# it but short of the grab spot makes the rover step up to it (F, or L/R to
+# centre it). Earlier zones: (0.22, 0.47, 0.73, 0.87), and before that the
+# grab spot alone, (0.36, 0.84, 0.55, 0.93).
+PICKUP_ZONE = (0.00, 0.08, 1.00, 0.86)
+# GRAB_SPOT: B/N - lift and belt - only once the item's centre is here,
+# where the floor meets the scoop, in the middle. Set as the middle third
+# and bottom third of the (0.22, 0.47, 0.73, 0.87) zone, and kept when the
+# zone grew. Nearer than the spot's bottom edge counts too: the item is then
+# on the scoop.
+GRAB_SPOT = (0.39, 0.74, 0.56, 0.87)
 
 
-def _zone(raw: str | None) -> tuple | None:
-    """ROBOSORT_PICKUP_ZONE="x1,y1,x2,y2" overrides the zone; "off" sends B/N
-    for a detection anywhere in the frame, as before the zone existed."""
+def _zone(raw: str | None, default: tuple, name: str) -> tuple | None:
+    """ROBOSORT_PICKUP_ZONE / ROBOSORT_GRAB_SPOT = "x1,y1,x2,y2" overrides
+    one; "off" turns it off. No zone: B/N for a detection anywhere in the
+    frame. No grab spot: B/N anywhere in the zone, with no approach."""
     if raw is None:
-        return PICKUP_ZONE
+        return default
     if raw.strip().lower() in ("off", "none", "0", ""):
         return None
     try:
         x1, y1, x2, y2 = (float(v) for v in raw.split(","))
     except ValueError:
-        raise SystemExit(f"ROBOSORT_PICKUP_ZONE={raw!r}: expected x1,y1,x2,y2 or off")
+        raise SystemExit(f"{name}={raw!r}: expected x1,y1,x2,y2 or off")
     if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
-        raise SystemExit(f"ROBOSORT_PICKUP_ZONE={raw!r}: need 0 <= x1 < x2 <= 1 "
+        raise SystemExit(f"{name}={raw!r}: need 0 <= x1 < x2 <= 1 "
                          f"and 0 <= y1 < y2 <= 1")
     return (x1, y1, x2, y2)
 
@@ -204,7 +217,10 @@ def load() -> Config:
         # stretched. 0 runs the model at the camera's full resolution.
         infer_size=_env("infer_size", 320, int),
         serial_retries=_env("serial_retries", 5, int),
-        pickup_zone=_zone(os.environ.get("ROBOSORT_PICKUP_ZONE")),
+        pickup_zone=_zone(os.environ.get("ROBOSORT_PICKUP_ZONE"), PICKUP_ZONE,
+                          "ROBOSORT_PICKUP_ZONE"),
+        grab_spot=_zone(os.environ.get("ROBOSORT_GRAB_SPOT"), GRAB_SPOT,
+                        "ROBOSORT_GRAB_SPOT"),
         threads=_env("threads", p["threads"], int),
         max_temp=_env("max_temp", p["max_temp"], float),
     )

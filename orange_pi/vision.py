@@ -12,8 +12,11 @@ config.py picks the profile from the OS.
 
 Connecting resets the Mega, so it runs its 10 s start-up countdown and
 then drives on its own; this program only reports what the camera sees.
-Trash is reported as B/N only once it is inside the pickup zone (config.py
-PICKUP_ZONE, ROBOSORT_PICKUP_ZONE to override) - anywhere else it sends X.
+Trash outside the pickup zone (config.py PICKUP_ZONE, ROBOSORT_PICKUP_ZONE
+to override) sends X. Inside it, short of the grab spot (GRAB_SPOT), it
+sends F, L or R, and the Mega steps toward it - one step per frame, the
+next frame taken once the step is over. At the grab spot it sends B/N: lift,
+belt, gate. See Pilot for the rules on top of that.
 Everything the Mega prints shows up here as "mega: ...". Stopping this
 program does not stop the rover - send 5 (python mega.py 5) or switch
 it off.
@@ -43,6 +46,57 @@ COOL_MARGIN = 7
 # limit before the next check.
 SLOW_MARGIN = 4
 SLOW_REST_S = 1.0
+
+# After an F/L/R the Mega moves up to 250 ms (main.ino APPROACH_STEP_MS),
+# plus a 200 ms pause first if a wheel reverses, and the rover coasts. The
+# next frame has to show where the step left it, or the item looks as far
+# away as before and the rover steps past it.
+STEP_SETTLE_S = 0.8
+# Pickups tried on one item before giving up on it. A scoop that missed
+# leaves the item at the grab spot, and a mark on the floor the model takes
+# for trash would otherwise be "picked up" for ever.
+MAX_PICKUP_TRIES = 2
+# Approach steps spent on one item before giving up on it. The zone reaches
+# the far floor, a good many steps away, but something on the rover itself
+# taken for trash never gets nearer - without a cap the rover would turn
+# toward it for ever.
+MAX_APPROACH_STEPS = 40
+
+
+class Pilot:
+    """What to send the Mega, from what the classifier sees, with rules one
+    frame cannot know:
+      - B/N only right after an approach step, so the frame that starts the
+        lift was taken with the rover standing still. Trash first seen at the
+        grab spot while driving sends F instead: the Mega stops on its first
+        F (main.ino serviceApproach), and the next frame decides.
+      - At most MAX_PICKUP_TRIES pickups and MAX_APPROACH_STEPS steps per
+        item, then X until a frame with no trash in reach."""
+
+    def __init__(self):
+        self.tries = 0
+        self.steps = 0
+
+    @property
+    def gave_up(self) -> bool:
+        return self.tries >= MAX_PICKUP_TRIES or self.steps >= MAX_APPROACH_STEPS
+
+    def command(self, seen: str, last_sent: str | None) -> str:
+        if seen == classify.NONE:
+            self.tries = self.steps = 0
+            return classify.NONE
+        if self.gave_up:
+            return classify.NONE
+        if seen in (classify.BIO, classify.NON_BIO) and last_sent not in classify.APPROACH:
+            return classify.AHEAD
+        return seen
+
+    def sent(self, command: str) -> None:
+        if command in (classify.BIO, classify.NON_BIO):
+            self.tries += 1
+            self.steps = 0           # a missed scoop gets a fresh approach
+        elif command in classify.APPROACH:
+            self.steps += 1
 
 
 def cpu_temp() -> float | None:
@@ -86,10 +140,10 @@ def parse_args():
     return p.parse_args()
 
 
-def draw_overlay(frame, det: classify.Detection) -> None:
+def draw_overlay(frame, det: classify.Detection, model: classify.Classifier) -> None:
     import cv2
 
-    classify.draw_box_and_zone(frame, det, CFG.pickup_zone)
+    classify.draw_box_and_zone(frame, det, model.zone, model.grab)
     label = str(det)
     color = classify.COLORS.get(det.command, (180, 180, 180))
     cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
@@ -101,10 +155,13 @@ def main():
 
     print(f"RoboSort vision  [{CFG.describe()}]")
 
-    # Only trash inside the pickup zone sends B/N - the Mega starts a pickup
-    # the moment it gets one, and the arm reaches that one spot.
+    # Only trash at the grab spot sends B/N - the Mega starts a pickup the
+    # moment it gets one, and the arm reaches that one spot. Elsewhere in
+    # the zone it is F/L/R, a step toward it.
     model = classify.Classifier(args.model, args.conf, args.infer_size,
-                                zone=CFG.pickup_zone, threads=CFG.threads)
+                                zone=CFG.pickup_zone, threads=CFG.threads,
+                                grab=CFG.grab_spot)
+    pilot = Pilot()
     source = capture.open_source(args.source, args.capture)
     link = serial_link.open_link(
         args.port, CFG.baud_rate, CFG.serial_retries, dry_run=args.dry_run
@@ -118,6 +175,11 @@ def main():
     warmed = False
     try:
         for label, frame in source.frames():
+            # Mid-pickup nothing can be sent, so skip the model: less heat.
+            if link.busy:
+                time.sleep(0.25)
+                continue
+
             if CFG.max_temp and (temp := cpu_temp()) is not None:
                 # The warm-up is the heaviest frame (~2 s of full load; it
                 # once took the Pi from 94 C to 102 C), so it starts cool.
@@ -138,12 +200,21 @@ def main():
 
             det = model.classify(frame)
 
-            sent = link.send(det.command)
+            command = pilot.command(det.command, link.last_command)
+            sent = link.send(command)
+            if sent:
+                pilot.sent(command)
             if sent and source.is_live:
-                print(f"  sent {det.command}  ({det})")
+                note = "" if command == det.command else "  - stopping to look again"
+                if command == classify.NONE and det.command != classify.NONE:
+                    note = (f"  - gave up on it ({pilot.tries} pickups, "
+                            f"{pilot.steps} steps); X until nothing is in reach")
+                print(f"  sent {command}  ({det}){note}")
+            if sent and command in classify.APPROACH and source.is_live:
+                time.sleep(STEP_SETTLE_S)    # the next frame shows the step done
 
             if show:
-                draw_overlay(frame, det)
+                draw_overlay(frame, det, model)
                 cv2.imshow("RoboSort Vision", frame)
                 key = cv2.waitKey(1 if source.is_live else 400) & 0xFF
                 if key == ord("q"):

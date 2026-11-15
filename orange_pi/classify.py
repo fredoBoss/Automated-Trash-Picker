@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 BIO, NON_BIO, NONE = "B", "N", "X"
+# Trash in the pickup zone, short of the grab spot: the Mega steps up to it -
+# forward, or a turn toward the side it is on.
+AHEAD, LEFT, RIGHT = "F", "L", "R"
+APPROACH = (AHEAD, LEFT, RIGHT)
 
 # The 4 trained dataset classes (Roboflow TRASH export). Keys are lowercase:
 # Roboflow names them "Leaves", "Paper", ... and the lookup ignores case.
@@ -54,6 +58,28 @@ def in_zone(box, zone) -> bool:
     if (x2 - x1) * (y2 - y1) > MAX_ITEM_AREA:
         return False
     return zx1 <= (x1 + x2) / 2 <= zx2 and y2 >= zy1 and y1 <= zy2
+
+
+def at_grab(box, grab) -> bool:
+    """The item's centre is in the grab spot's columns and level with the
+    spot or nearer. Nearer counts: below the spot the item is on the scoop
+    already, and stepping again would push it away."""
+    x1, y1, x2, y2 = box
+    gx1, gy1, gx2, _ = grab
+    if (x2 - x1) * (y2 - y1) > MAX_ITEM_AREA:
+        return False
+    return gx1 <= (x1 + x2) / 2 <= gx2 and (y1 + y2) / 2 >= gy1
+
+
+def steer(box, grab) -> str:
+    """Which step brings the item toward the grab spot: a turn toward it
+    while it is off to one side, straight ahead once it is lined up."""
+    cx = (box[0] + box[2]) / 2
+    if cx < grab[0]:
+        return LEFT
+    if cx > grab[2]:
+        return RIGHT
+    return AHEAD
 
 
 def _read_metadata(path: Path) -> tuple[dict[int, str], tuple[int, int]]:
@@ -189,14 +215,15 @@ class _NcnnBackend:
 class Detection:
     class_name: str | None
     confidence: float
-    command: str            # BIO / NON_BIO / NONE - what goes to the Mega
+    command: str            # BIO / NON_BIO / NONE, or AHEAD / LEFT / RIGHT
     latency_ms: float
     box: tuple | None = None    # (x1, y1, x2, y2), fractions of the frame
     in_reach: bool = True       # inside the pickup zone, or no zone in use
 
     @property
     def category(self) -> str:
-        return {BIO: "BIO", NON_BIO: "NON-BIO"}.get(self.command, "none")
+        return {BIO: "BIO", NON_BIO: "NON-BIO", AHEAD: "step forward",
+                LEFT: "turn left", RIGHT: "turn right"}.get(self.command, "none")
 
     def __str__(self) -> str:
         if self.class_name is None:
@@ -206,27 +233,38 @@ class Detection:
                 f"{self.class_name}, out of reach -> none "
                 f"({self.confidence:.2f}, {self.latency_ms:.0f} ms)"
             )
+        if self.command in APPROACH:
+            return (
+                f"{self.class_name}, ahead -> {self.category} "
+                f"({self.confidence:.2f}, {self.latency_ms:.0f} ms)"
+            )
         return (
             f"{self.class_name} -> {self.category} "
             f"({self.confidence:.2f}, {self.latency_ms:.0f} ms)"
         )
 
 
-COLORS = {BIO: (0, 200, 0), NON_BIO: (0, 0, 220)}     # BGR; anything else grey
+# BGR; anything else grey. Approach steps in orange.
+COLORS = {BIO: (0, 200, 0), NON_BIO: (0, 0, 220),
+          AHEAD: (0, 140, 255), LEFT: (0, 140, 255), RIGHT: (0, 140, 255)}
 
 
-def draw_box_and_zone(frame, det: Detection, zone) -> None:
-    """The pickup zone in yellow and the detection's box: green/red when it
-    sends B/N, grey when it is out of reach or below the threshold."""
+def draw_box_and_zone(frame, det: Detection, zone, grab=None) -> None:
+    """The pickup zone in yellow, the grab spot in cyan, and the detection's
+    box: green/red when it sends B/N, orange while stepping up to it, grey
+    when it is out of reach or below the threshold."""
     import cv2
 
     h, w = frame.shape[:2]
-    if zone is not None:
-        x1, y1, x2, y2 = zone
+    for area, name, color in ((zone, "pickup zone", (0, 220, 220)),
+                              (grab, "grab", (255, 200, 0))):
+        if area is None:
+            continue
+        x1, y1, x2, y2 = area
         cv2.rectangle(frame, (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h)),
-                      (0, 220, 220), 2)
-        cv2.putText(frame, "pickup zone", (int(x1 * w), int(y1 * h) - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 220, 220), 1)
+                      color, 2)
+        cv2.putText(frame, name, (int(x1 * w), int(y1 * h) - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
     if det.box is not None:
         x1, y1, x2, y2 = det.box
         cv2.rectangle(frame, (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h)),
@@ -235,7 +273,8 @@ def draw_box_and_zone(frame, det: Detection, zone) -> None:
 
 class Classifier:
     def __init__(self, model_path: str, confidence: float, infer_size: int = 320,
-                 zone: tuple | None = None, threads: int = 0):
+                 zone: tuple | None = None, threads: int = 0,
+                 grab: tuple | None = None):
         path = Path(model_path)
         if not path.exists():
             models = Path(__file__).parent / "models"
@@ -252,6 +291,9 @@ class Classifier:
         self.confidence = confidence
         self.infer_size = infer_size
         self.zone = zone                # None: any detection sends B/N
+        # Where B/N goes out; elsewhere in the zone it is an approach step.
+        # Only with a zone - None: B/N anywhere in the zone.
+        self.grab = grab if zone is not None else None
         self.model_path = str(path)
         self._imgsz_cache: dict[tuple[int, int], tuple[int, int]] = {}
 
@@ -303,7 +345,7 @@ class Classifier:
                 d for d in found
                 if d[1] >= self.confidence
                 and CLASS_MAP.get(d[0].lower(), NONE) != NONE
-                and in_zone(d[2], self.zone)
+                and self._in_reach(d[2])
             ]
             if reachable:
                 best = max(reachable, key=lambda d: d[1])
@@ -311,9 +353,18 @@ class Classifier:
         if best is None:
             return Detection(None, 0.0, NONE, latency_ms)
         name, conf, box = best
-        in_reach = self.zone is None or in_zone(box, self.zone)
+        in_reach = self.zone is None or self._in_reach(box)
         if conf >= self.confidence and in_reach:
             command = CLASS_MAP.get(name.lower(), NONE)
+            # Short of the grab spot: step up to it instead of lifting.
+            if command != NONE and self.grab is not None and not at_grab(box, self.grab):
+                command = steer(box, self.grab)
         else:
             command = NONE
         return Detection(name, conf, command, latency_ms, box, in_reach)
+
+    def _in_reach(self, box) -> bool:
+        # The grab spot reaches below the zone: an item on the scoop is
+        # under the zone's bottom edge, and is still the one to pick up.
+        return in_zone(box, self.zone) or (
+            self.grab is not None and at_grab(box, self.grab))

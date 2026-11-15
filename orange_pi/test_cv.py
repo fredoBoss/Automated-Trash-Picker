@@ -81,12 +81,13 @@ def parse_args():
     return p.parse_args()
 
 
-def annotate(frame, det: classify.Detection, fps: float | None = None, zone=None):
+def annotate(frame, det: classify.Detection, fps: float | None = None, zone=None,
+             grab=None):
     """Only the single best detection is ever acted on, so that is the one
-    box drawn - with the pickup zone, when one is in use."""
+    box drawn - with the pickup zone and grab spot, when in use."""
     color = classify.COLORS.get(det.command, (170, 170, 170))
 
-    classify.draw_box_and_zone(frame, det, zone)
+    classify.draw_box_and_zone(frame, det, zone, grab)
     cv2.rectangle(frame, (0, 0), (frame.shape[1], 34), (0, 0, 0), -1)
     cv2.putText(frame, str(det), (8, 23),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
@@ -137,7 +138,7 @@ def run_live(model: classify.Classifier, source, show: bool):
 
         if show:
             cv2.imshow("RoboSort - vision only (no serial)",
-                       annotate(frame, det, fps, model.zone))
+                       annotate(frame, det, fps, model.zone, model.grab))
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
@@ -256,10 +257,14 @@ def main():
     # folder of dataset photos has trash all over the frame, and scoring
     # it is about the model's labels, so folders run without it.
     zone = CFG.pickup_zone if source.is_live else None
+    grab = CFG.grab_spot if zone else None
     print(f"  zone:   {', '.join(f'{v:.2f}' for v in zone) if zone else 'off'}"
-          f"{'  (B/N only inside it)' if zone else ''}\n")
+          f"{'  (F/L/R inside it)' if zone and grab else '  (B/N only inside it)' if zone else ''}")
+    if grab:
+        print(f"  grab:   {', '.join(f'{v:.2f}' for v in grab)}  (B/N only here)")
+    print()
     model = classify.Classifier(args.model, args.conf, args.infer_size, zone=zone,
-                                threads=CFG.threads)
+                                threads=CFG.threads, grab=grab)
 
     try:
         if source.is_live:
