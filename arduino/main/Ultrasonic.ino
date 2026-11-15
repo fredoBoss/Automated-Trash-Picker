@@ -92,11 +92,11 @@ bool sonarPresent(uint8_t index) {
 
 static void printSonar(bool present, uint16_t cm) {
   if (!present) {
-    Serial.print(F("NOT CONNECTED"));
+    Link.print(F("NOT CONNECTED"));
     return;
   }
-  Serial.print(cm);
-  Serial.print(cm == MAX_RANGE_CM ? F(" cm (no echo - nothing within 2 m)") : F(" cm"));
+  Link.print(cm);
+  Link.print(cm == MAX_RANGE_CM ? F(" cm (no echo - nothing within 2 m)") : F(" cm"));
 }
 
 // Start-up report: is each sensor there, and what does it read. One serial
@@ -106,11 +106,11 @@ void printSensorCheck() {
   bool okRight = sonarPresent(IDX_RIGHT);
   readAllDistances();
 
-  Serial.print(F("INIT sensors - left "));
+  Link.print(F("INIT sensors - left "));
   printSonar(okLeft, distLeft);
-  Serial.print(F(", right "));
+  Link.print(F(", right "));
   printSonar(okRight, distRight);
-  Serial.println();
+  Link.println();
 
   lcdCheck(F("Sonar L"), okLeft  ? F("OK") : F("MISSING"), okLeft);
   lcdCheck(F("Sonar R"), okRight ? F("OK") : F("MISSING"), okRight);

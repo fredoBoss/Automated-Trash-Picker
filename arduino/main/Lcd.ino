@@ -58,16 +58,16 @@ void lcdSetup() {
 
 // Start-up report, with the other INIT lines in setup().
 void printLcdCheck() {
-  Serial.print(F("INIT lcd    - "));
+  Link.print(F("INIT lcd    - "));
   if (!lcd) {
-    Serial.println(F("none found on SDA 20 / SCL 21, running without it"));
+    Link.println(F("none found on SDA 20 / SCL 21, running without it"));
     return;
   }
-  Serial.print(F("16x2 at 0x"));
-  Serial.println(lcdAddress, HEX);
+  Link.print(F("16x2 at 0x"));
+  Link.println(lcdAddress, HEX);
 }
 
-/*
+/*  
  * Show text on one row, padded to the full width so nothing of the old
  * text is left behind. Only the characters that changed are sent: each
  * one is several I2C writes, about a millisecond, and loop() calls this
@@ -135,20 +135,31 @@ const __FlashStringHelper *classLabel(char command) {
 }
 
 /*
- * Row 1, every loop: is the Pi talking, and what did it last report.
- * Opening the port resets the Mega, so a running vision.py is heard within
- * a second of boot. Still silent when the countdown ends means no Pi;
- * silent for PI_TIMEOUT_MS after being heard means it went away.
+ * Who is sending the vision pipeline's lines right now, for the LCD and the
+ * STATUS line: 'P' the Pi, on its wire; 'U' a laptop on USB; 'L' the Pi was
+ * heard and has been silent for PI_TIMEOUT_MS; '-' the Pi was never heard.
+ */
+char visionHost() {
+  uint32_t now = millis();
+  if (piHeard  && now - piHeardAt  <= PI_TIMEOUT_MS) return 'P';
+  if (usbHeard && now - usbHeardAt <= PI_TIMEOUT_MS) return 'U';
+  return piHeard ? 'L' : '-';
+}
+
+/*
+ * Row 1, every loop: is the Pi talking, and what did it last report. "Pi OK"
+ * is only ever the Pi's own wire; vision.py run from a laptop shows as
+ * "USB OK". Still silent when the countdown ends means no Pi; silent for
+ * PI_TIMEOUT_MS after being heard means it went away.
  */
 void lcdService() {
   if (!lcd) return;
   char row[LCD_COLS + 1];
-  if (!piHeard) {
-    strcpy_P(row, autoStartPending ? PSTR("Pi: checking...") : PSTR("Pi: not found"));
-  } else if (millis() - piHeardAt > PI_TIMEOUT_MS) {
-    strcpy_P(row, PSTR("Pi: lost"));
-  } else {
-    snprintf_P(row, sizeof(row), PSTR("Pi OK  %S"), (PGM_P)classLabel(lastSeen));
+  switch (visionHost()) {
+    case 'P': snprintf_P(row, sizeof(row), PSTR("Pi OK  %S"), (PGM_P)classLabel(lastSeen)); break;
+    case 'U': snprintf_P(row, sizeof(row), PSTR("USB OK %S"), (PGM_P)classLabel(lastSeen)); break;
+    case 'L': strcpy_P(row, PSTR("Pi: lost")); break;
+    default:  strcpy_P(row, autoStartPending ? PSTR("Pi: checking...") : PSTR("Pi: not found"));
   }
   lcdRow(1, row);
 }

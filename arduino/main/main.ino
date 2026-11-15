@@ -27,6 +27,9 @@ const uint8_t PIN_SERVO_PAN     = 11;
 const uint8_t PIN_TRIG[2] = {36, 34};
 const uint8_t PIN_ECHO[2] = {37, 35};
 
+// Pi link: Serial1 - TX1 D18, RX1 D19 - to the Orange Pi's UART3. D18 goes
+// through a 10k/20k divider: the Pi's pins take 3.3 V, not 5 V.
+
 // Status LCD: I2C on the Mega's fixed SDA 20 / SCL 21 - see Lcd.ino.
 
 // ------------------------------------------------------------- tuning
@@ -44,9 +47,13 @@ enum Command { CMD_NONE = 'X', CMD_BIO = 'B', CMD_NONBIO = 'N', CMD_PING = 'P' }
 
 char     lastCommand   = CMD_NONE;
 uint32_t lastCommandAt = 0;
-char     lastSeen      = CMD_NONE; // last B/N/X from the Pi, never consumed - for the LCD
-bool     piHeard       = false;    // any line from the Pi since boot
+char     lastSeen      = CMD_NONE; // last B/N/X received, never consumed - for the LCD
+// The vision pipeline's lines - P, B, N, X - as last heard on each port: the
+// Pi's wire (Serial1), and USB, where a laptop can run vision.py instead.
+bool     piHeard       = false;    // any on the Pi's wire since boot
 uint32_t piHeardAt     = 0;        // when the latest one arrived
+bool     usbHeard      = false;    // the same, for USB
+uint32_t usbHeardAt    = 0;
 bool     pickupBusy    = false;   // true while the arm sequence is running
 bool     manualMode    = true;    // stopped until the init countdown ends or 'A'
 char     manualMove    = 0;       // drive command running: '8' '2' '4' '6', 0 = none
@@ -56,8 +63,51 @@ uint32_t initStartedAt    = 0;
 
 uint16_t distLeft, distRight;
 
+/*
+ * Serial input, one line buffer per port, so junk on the Pi's wire - noise,
+ * an echo - cannot run into a command typed on USB, or the other way round.
+ * Read in readSerialCommand(). Declared up here, not with it, because the
+ * prototypes the Arduino IDE generates for functions taking a LineIn are
+ * placed above the first function in the file.
+ */
+const uint8_t LINE_MAX = 12;           // longest commands are "LOOKRIGHT" / "LOOKAHEAD"
+
+struct LineIn {
+  char     text[LINE_MAX + 1];
+  uint8_t  len;
+  bool     tooLong;
+  uint32_t lastAt;       // last character received
+  bool     quiet;        // junk was reported at junkAt; more is ignored for now
+  uint32_t junkAt;
+};
+LineIn fromPi, fromUsb;
+
+/*
+ * Every line goes out on both ports, and commands are read from both: the
+ * Pi on Serial1, and USB for a laptop running mega.py or the Serial
+ * Monitor, so bench tests still work with the Pi wired in.
+ */
+class BothPorts : public Print {
+public:
+  size_t write(uint8_t c) override {
+    Serial1.write(c);
+    Serial.write(c);
+    return 1;
+  }
+  void flush() override {
+    Serial1.flush();
+    Serial.flush();
+  }
+};
+BothPorts Link;
+
 void setup() {
-  Serial.begin(9600);             // to the Orange Pi (USB / UART0)
+  Serial.begin(9600);             // USB: a laptop, for uploads and mega.py
+  Serial1.begin(9600);            // the Orange Pi's UART3, D18 TX1 / D19 RX1
+  // Hold RX1 high when nothing drives it. A loose Pi wire, or the Pi still
+  // booting, leaves D19 floating, and it reads noise as a stream of junk lines.
+  // ~50 uA into the Pi's 3.3 V TX pin when wired; harmless.
+  pinMode(19, INPUT_PULLUP);
 
   pinMode(LED_BUILTIN, OUTPUT);   // heartbeat, see heartbeat()
 
@@ -66,12 +116,12 @@ void setup() {
   servoSetup();
   ultrasonicSetup();
 
-  Serial.println(F("RoboSort Mega ready"));
+  Link.println(F("RoboSort Mega ready"));
   printHelp();
-  Serial.println(F("INIT drive  - relays off, wheels stopped"));
-  Serial.println(F("INIT arm    - lift at 30, arm down; sort gate at 90"));
-  Serial.println(F("INIT camera - pan servo at 90, looking straight ahead"));
-  Serial.println(F("INIT belt   - conveyor off"));
+  Link.println(F("INIT drive  - relays off, wheels stopped"));
+  Link.println(F("INIT arm    - lift at 30, arm down; sort gate at 90"));
+  Link.println(F("INIT camera - pan servo at 90, looking straight ahead"));
+  Link.println(F("INIT belt   - conveyor off"));
   printLcdCheck();
 
   // The same checks on the LCD, a line each. Only the sonars can answer
@@ -83,9 +133,9 @@ void setup() {
   lcdCheck(F("Servos"), F("home"),  true);
   lcdCheck(F("Camera"), F("ahead"), true);
   printSensorCheck();             // pings both sonars, adds their LCD lines
-  Serial.print(F("INIT - driving starts in "));
-  Serial.print(INIT_MS / 1000);
-  Serial.println(F(" s. Any drive/arm/camera command cancels it; A starts now."));
+  Link.print(F("INIT - driving starts in "));
+  Link.print(INIT_MS / 1000);
+  Link.println(F(" s. Any drive/arm/camera command cancels it; A starts now."));
   initStartedAt = millis();
 }
 
@@ -119,9 +169,9 @@ void loop() {
     driveStop();
     // PICKUP and SORTED bracket the sequence. The Pi sends nothing in
     // between, so the item on the arm or a flicker cannot start another.
-    Serial.print(F("PICKUP "));
-    Serial.print(classLabel(item));
-    Serial.println(F(" - arm up, belt, gate"));
+    Link.print(F("PICKUP "));
+    Link.print(classLabel(item));
+    Link.println(F(" - arm up, belt, gate"));
     lcdPickup(item, F("pick up"));
     runPickupSequence();
     lcdPickup(item, F("sorting"));
@@ -132,9 +182,9 @@ void loop() {
     // one pickup. Before SORTED, so anything after SORTED is new.
     readSerialCommand();
     lastCommand = CMD_NONE;
-    Serial.print(F("SORTED "));
-    Serial.print(classLabel(item));
-    Serial.println(F(" - arm down, gate home"));
+    Link.print(F("SORTED "));
+    Link.print(classLabel(item));
+    Link.println(F(" - arm down, gate home"));
     return;
   }
 
@@ -158,63 +208,96 @@ void heartbeat() {
 
 
  
-const uint8_t  LINE_MAX     = 12;    // longest commands are "LOOKRIGHT" / "LOOKAHEAD"
-const uint16_t LINE_IDLE_MS = 100;
+const uint16_t LINE_IDLE_MS  = 100;
+const uint16_t JUNK_QUIET_MS = 2000;  // after junk is reported, more is ignored this long
 
-char     rxLine[LINE_MAX + 1];
-uint8_t  rxLen     = 0;
-bool     rxTooLong = false;
-uint32_t rxLastAt  = 0;
+// Every letter runCommand() acts on, plus the P heartbeat. A line that is
+// not one of these, or a word from wordToCommand(), is junk. A new command
+// letter goes here as well as into runCommand()'s switch.
+const char COMMAND_CHARS[] PROGMEM = "BNXP82465UDHCO790A?";
 
 void readSerialCommand() {
-  while (Serial.available() > 0) {
-    char c = Serial.read();
-    rxLastAt = millis();
+  while (Serial1.available() > 0) rxChar(fromPi,  Serial1.read());
+  while (Serial.available() > 0)  rxChar(fromUsb, Serial.read());
+  endIdleLine(fromPi);
+  endIdleLine(fromUsb);
+}
 
-    if (c == '\n' || c == '\r') {
-      endLine();
-    } else if (c == ' ' || c == '\t') {
-      // dropped
-    } else if (rxLen < LINE_MAX) {
-      if (c >= 'a' && c <= 'z') c -= 32;   // typed by hand, accept lowercase
-      rxLine[rxLen++] = c;
-    } else {
-      rxTooLong = true;
-    }
-  }
+// A line with no newline ends when its port has been quiet LINE_IDLE_MS.
+void endIdleLine(LineIn &in) {
+  if ((in.len > 0 || in.tooLong) && millis() - in.lastAt >= LINE_IDLE_MS) endLine(in);
+}
 
-  if ((rxLen > 0 || rxTooLong) && millis() - rxLastAt >= LINE_IDLE_MS) {
-    endLine();
+void rxChar(LineIn &in, char c) {
+  in.lastAt = millis();
+
+  if (c == '\n' || c == '\r') {
+    endLine(in);
+  } else if (c == ' ' || c == '\t') {
+    // dropped
+  } else if (in.len < LINE_MAX) {
+    if (c >= 'a' && c <= 'z') c -= 32;   // typed by hand, accept lowercase
+    in.text[in.len++] = c;
+  } else {
+    in.tooLong = true;
   }
 }
 
+// The command a line stands for: a known letter or word. 0 = not a command.
+char commandFor(const char *line) {
+  if (line[0] == '\0') return 0;
+  if (line[1] == '\0') return strchr_P(COMMAND_CHARS, line[0]) ? line[0] : 0;
+  return wordToCommand(line);
+}
 
-void endLine() {
-  rxLine[rxLen] = '\0';
-  bool gotLine = rxLen > 0 || rxTooLong;
-  // P is the Pi's once-a-second heartbeat. It only marks the Pi as alive,
-  // so it is not echoed - RX P every second would bury every other line.
-  bool ping = !rxTooLong && rxLen == 1 && rxLine[0] == CMD_PING;
+void endLine(LineIn &in) {
+  in.text[in.len] = '\0';
+  bool any = in.len > 0 || in.tooLong;
+  char c   = in.tooLong ? 0 : commandFor(in.text);
 
-  if (gotLine) {
-    piHeard   = true;             // anything at all from the Pi counts
-    piHeardAt = millis();
+  if (c) {
+    // Only what vision.py sends - P, B, N, X - shows the vision pipeline is
+    // alive, and only on the Pi's wire is it the Pi. A 5 or ? typed on the
+    // Serial Monitor is neither: it used to read "Pi OK", then "Pi: lost",
+    // with no Pi wired at all.
+    if (c == CMD_PING || c == CMD_BIO || c == CMD_NONBIO || c == CMD_NONE) {
+      if (&in == &fromPi) { piHeard  = true; piHeardAt  = millis(); }
+      else                { usbHeard = true; usbHeardAt = millis(); }
+    }
+    // P is the Pi's once-a-second heartbeat. It only marks the Pi as alive,
+    // so it is not echoed - RX P every second would bury every other line.
+    if (c != CMD_PING) {
+      Link.print(F("RX "));
+      Link.println(in.text);
+      Link.flush();
+      runCommand(c);
+    }
+  } else if (any) {
+    reportJunk(in, &in == &fromPi ? F("Pi") : F("USB"));
   }
-  if (gotLine && !ping) {
-    Serial.print(F("RX "));
-    Serial.print(rxLine);
-    if (rxTooLong) Serial.print(F("..."));
-    Serial.println();
-    Serial.flush();
-  }
+  in.len     = 0;
+  in.tooLong = false;
+}
 
-  if (rxTooLong) {
-    Serial.println(F("FAIL - too long, not a command (send ? for the list)"));
-  } else if (rxLen > 0 && !ping) {
-    runCommand(rxLine);
-  }
-  rxLen     = 0;
-  rxTooLong = false;
+/*
+ * A line that is not a command: noise on a loose wire, a typo, or the
+ * Mega's own output coming back - a wiring loop from D18 to D19, or a Pi
+ * program holding the port open with echo on. Answering every one feeds an
+ * echo forever, each answer returning as more junk, so junk is not echoed
+ * as RX and is reported once, then ignored for JUNK_QUIET_MS. An echo of
+ * the report lands inside that quiet time and dies there.
+ */
+void reportJunk(LineIn &in, const __FlashStringHelper *port) {
+  uint32_t now = millis();
+  if (in.quiet && now - in.junkAt < JUNK_QUIET_MS) return;
+  in.quiet  = true;
+  in.junkAt = now;
+  Link.print(F("FAIL from "));
+  Link.print(port);
+  Link.print(F(": "));
+  Link.print(in.text);
+  if (in.tooLong) Link.print(F("..."));
+  Link.println(F(" - not a command, ignored (send ? for the list)"));
 }
 
 char wordToCommand(const char *word) {
@@ -230,9 +313,8 @@ char wordToCommand(const char *word) {
   return 0;
 }
 
-void runCommand(const char *line) {
-  char c = (line[1] == '\0') ? line[0] : wordToCommand(line);
-
+// c comes from commandFor(), so it is always one of COMMAND_CHARS.
+void runCommand(char c) {
   switch (c) {
     // From the Pi: latch it, loop() decides what to do about it.
     case CMD_BIO:
@@ -241,12 +323,12 @@ void runCommand(const char *line) {
       lastCommand   = c;
       lastCommandAt = millis();
       lastSeen      = c;
-      Serial.print(F("OK "));
-      if (c == CMD_BIO)         Serial.print(F("bio"));
-      else if (c == CMD_NONBIO) Serial.print(F("non-bio"));
-      else                      Serial.print(F("nothing detected"));
-      if (manualMode && c != CMD_NONE) Serial.print(F(" - no pickup in MANUAL, send A"));
-      Serial.println();
+      Link.print(F("OK "));
+      if (c == CMD_BIO)         Link.print(F("bio"));
+      else if (c == CMD_NONBIO) Link.print(F("non-bio"));
+      else                      Link.print(F("nothing detected"));
+      if (manualMode && c != CMD_NONE) Link.print(F(" - no pickup in MANUAL, send A"));
+      Link.println();
       break;
 
     // Manual driving - each command runs MANUAL_MOVE_MS, then stops.
@@ -273,17 +355,12 @@ void runCommand(const char *line) {
 
     case 'A': resumeAuto(); ok(F("autonomous - driving on its own, send 5 to stop")); break;
     case '?': printHelp(); printStatus(); break;
-
-    default:
-      Serial.print(F("FAIL "));
-      Serial.print(line);
-      Serial.println(F(" - unknown command (send ? for the list)"));
   }
 }
 
 void ok(const __FlashStringHelper *what) {
-  Serial.print(F("OK "));
-  Serial.println(what);
+  Link.print(F("OK "));
+  Link.println(what);
 }
 
 void enterManual() {
@@ -292,7 +369,7 @@ void enterManual() {
   manualMove = 0;
   if (manualMode) return;
   manualMode = true;
-  Serial.println(F("MANUAL - wheels stopped, send A to resume"));
+  Link.println(F("MANUAL - wheels stopped, send A to resume"));
 }
 
 /*
@@ -308,7 +385,7 @@ void manualDrive(char move) {
     driveStop();
     manualMove = 0;
     lcdRow(0, F("MANUAL blocked"));
-    Serial.print(F("FAIL forward - "));
+    Link.print(F("FAIL forward - "));
     printBlocked();
     return;
   }
@@ -322,11 +399,11 @@ void manualDrive(char move) {
   manualMove   = move;
   manualMoveAt = millis();   // after drive(), which may pause before a reversal
 
-  Serial.print(F("OK "));
-  Serial.print(moveName(move));
-  Serial.print(F(" - running "));
-  Serial.print(MANUAL_MOVE_MS);
-  Serial.println(F(" ms"));
+  Link.print(F("OK "));
+  Link.print(moveName(move));
+  Link.print(F(" - running "));
+  Link.print(MANUAL_MOVE_MS);
+  Link.println(F(" ms"));
 }
 
 const __FlashStringHelper *moveName(char move) {
@@ -346,15 +423,15 @@ void serviceManualMove() {
   if (millis() - manualMoveAt >= MANUAL_MOVE_MS) {
     driveStop();
     lcdRow(0, F("MANUAL stopped"));
-    Serial.print(F("DONE "));
-    Serial.print(moveName(manualMove));
-    Serial.println(F(" - time up, send it again to keep going"));
+    Link.print(F("DONE "));
+    Link.print(moveName(manualMove));
+    Link.println(F(" - time up, send it again to keep going"));
     manualMove = 0;
   } else if (manualMove == '8' && sideBlocked()) {
     driveStop();
     manualMove = 0;
     lcdRow(0, F("MANUAL blocked"));
-    Serial.print(F("STOP forward - "));
+    Link.print(F("STOP forward - "));
     printBlocked();
   }
 }
@@ -365,13 +442,13 @@ bool sideBlocked() {
 }
 
 void printBlocked() {
-  Serial.print(F("blocked: left "));
-  Serial.print(distLeft);
-  Serial.print(F(" cm, right "));
-  Serial.print(distRight);
-  Serial.print(F(" cm (limit "));
-  Serial.print(STOP_CM);
-  Serial.println(F(" cm)"));
+  Link.print(F("blocked: left "));
+  Link.print(distLeft);
+  Link.print(F(" cm, right "));
+  Link.print(distRight);
+  Link.print(F(" cm (limit "));
+  Link.print(STOP_CM);
+  Link.println(F(" cm)"));
 }
 
 /*
@@ -381,29 +458,36 @@ void printBlocked() {
  */
 void printStatus() {
   readAllDistances();
-  Serial.print(F("STATUS "));
-  Serial.print(manualMode ? F("MANUAL") : F("AUTO"));
-  Serial.print(F(", manual move: "));
-  Serial.print(manualMove ? moveName(manualMove) : F("none"));
-  Serial.print(F(", conveyor "));
-  Serial.print(conveyorIsOn() ? F("on") : F("off"));
-  Serial.print(F(", camera "));
-  Serial.print(cameraAngle());
-  Serial.print(F(" deg"));
-  Serial.print(F(", left "));
-  Serial.print(distLeft);
-  Serial.print(F(" cm, right "));
-  Serial.print(distRight);
-  Serial.print(F(" cm, up "));
-  Serial.print(millis() / 1000);
-  Serial.print(F(" s"));
+  Link.print(F("STATUS "));
+  Link.print(manualMode ? F("MANUAL") : F("AUTO"));
+  Link.print(F(", manual move: "));
+  Link.print(manualMove ? moveName(manualMove) : F("none"));
+  Link.print(F(", conveyor "));
+  Link.print(conveyorIsOn() ? F("on") : F("off"));
+  Link.print(F(", camera "));
+  Link.print(cameraAngle());
+  Link.print(F(" deg"));
+  Link.print(F(", left "));
+  Link.print(distLeft);
+  Link.print(F(" cm, right "));
+  Link.print(distRight);
+  Link.print(F(" cm, up "));
+  Link.print(millis() / 1000);
+  Link.print(F(" s"));
+  // The LCD's bottom row, for whoever cannot see the screen.
+  switch (visionHost()) {
+    case 'P': Link.print(F(", Pi OK"));     break;
+    case 'U': Link.print(F(", USB OK"));    break;
+    case 'L': Link.print(F(", Pi lost"));   break;
+    default:  Link.print(F(", Pi not heard"));
+  }
   if (autoStartPending) {
     uint32_t elapsed = millis() - initStartedAt;
-    Serial.print(F(", auto start in "));
-    Serial.print(elapsed >= INIT_MS ? 0 : (INIT_MS - elapsed + 999) / 1000);
-    Serial.print(F(" s"));
+    Link.print(F(", auto start in "));
+    Link.print(elapsed >= INIT_MS ? 0 : (INIT_MS - elapsed + 999) / 1000);
+    Link.print(F(" s"));
   }
-  Serial.println();
+  Link.println();
 }
 
 /*
@@ -433,9 +517,9 @@ void serviceAutoStart() {
   uint32_t elapsed = millis() - initStartedAt;
   if (elapsed >= INIT_MS) {
     resumeAuto();
-    Serial.print(F("AUTO - init done, driving forward; turns away from anything within "));
-    Serial.print(AVOID_CM);
-    Serial.println(F(" cm. Send 5 to stop."));
+    Link.print(F("AUTO - init done, driving forward; turns away from anything within "));
+    Link.print(AVOID_CM);
+    Link.println(F(" cm. Send 5 to stop."));
     return;
   }
 
@@ -443,9 +527,9 @@ void serviceAutoStart() {
   lcdCountdown(left);
   if (left != shown && left < INIT_MS / 1000) {
     shown = left;
-    Serial.print(F("INIT - driving in "));
-    Serial.print(left);
-    Serial.println(F(" s"));
+    Link.print(F("INIT - driving in "));
+    Link.print(left);
+    Link.println(F(" s"));
   }
 }
 
@@ -454,19 +538,19 @@ void serviceAutoStart() {
 void cancelAutoStart() {
   if (!autoStartPending) return;
   autoStartPending = false;
-  Serial.println(F("INIT - auto start cancelled, staying in MANUAL (send A to drive)"));
+  Link.println(F("INIT - auto start cancelled, staying in MANUAL (send A to drive)"));
 }
 
 void printHelp() {
-  Serial.println(F("commands: 8 or FORWARD  2 or BACKWARD  4 or LEFT  6 or RIGHT  5 or STOP"));
-  Serial.println(F("          U lift up  D lift down"));
-  Serial.println(F("          7 or LOOKLEFT  9 or LOOKRIGHT  0 or LOOKAHEAD - camera"));
-  Serial.println(F("          H home     C conveyor on  O conveyor off"));
-  Serial.println(F("          A autonomous  ? this list + status"));
-  Serial.println(F("          B bio      N non-bio    X none"));
-  Serial.println(F("          P heartbeat the Pi sends every second - no reply"));
-  Serial.println(F("replies:  RX received, OK done, FAIL refused, DONE/STOP move ended"));
-  Serial.println(F("          PICKUP/SORTED a pickup started / its item is in the bin"));
+  Link.println(F("commands: 8 or FORWARD  2 or BACKWARD  4 or LEFT  6 or RIGHT  5 or STOP"));
+  Link.println(F("          U lift up  D lift down"));
+  Link.println(F("          7 or LOOKLEFT  9 or LOOKRIGHT  0 or LOOKAHEAD - camera"));
+  Link.println(F("          H home     C conveyor on  O conveyor off"));
+  Link.println(F("          A autonomous  ? this list + status"));
+  Link.println(F("          B bio      N non-bio    X none"));
+  Link.println(F("          P heartbeat the Pi sends every second - no reply"));
+  Link.println(F("replies:  RX received, OK done, FAIL refused, DONE/STOP move ended"));
+  Link.println(F("          PICKUP/SORTED a pickup started / its item is in the bin"));
 }
 
 bool isCommandFresh() {
@@ -501,11 +585,11 @@ void avoidObstacle() {
     turnLeft = distRight < AVOID_CM;
   }
 
-  Serial.print(F("AVOID - left "));
-  Serial.print(distLeft);
-  Serial.print(F(" cm, right "));
-  Serial.print(distRight);
-  Serial.println(turnLeft ? F(" cm -> turn left") : F(" cm -> turn right"));
+  Link.print(F("AVOID - left "));
+  Link.print(distLeft);
+  Link.print(F(" cm, right "));
+  Link.print(distRight);
+  Link.println(turnLeft ? F(" cm -> turn left") : F(" cm -> turn right"));
   lcdRow(0, turnLeft ? F("AVOID turn left") : F("AVOID turn right"));
 
   if (turnLeft) {
