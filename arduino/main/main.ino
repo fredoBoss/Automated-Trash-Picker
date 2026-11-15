@@ -41,9 +41,17 @@ const uint16_t TURN_MS       = 3000;  // how long an avoidance turn runs
 const uint16_t MANUAL_MOVE_MS = 1000; // how long one manual drive command runs
 const uint16_t INIT_MS       = 10000; // after setup: motors held stopped, then auto start
 const uint32_t CMD_TIMEOUT_MS = 5000; // Pi silence before we assume no target
+// Approach: one F/L/R from the Pi is one short move, then the rover waits
+// stopped for the Pi's next look. Short, so an item cannot jump past the
+// grab spot between two looks - lengthen them if the rover barely moves.
+const uint16_t APPROACH_STEP_MS = 250;  // forward step toward trash
+const uint16_t APPROACH_TURN_MS = 150;  // spin step to centre trash left/right
+const uint16_t APPROACH_HOLD_MS = 3000; // trash lost mid-approach: stay stopped this long
 
 // ------------------------------------------------------------- state
-enum Command { CMD_NONE = 'X', CMD_BIO = 'B', CMD_NONBIO = 'N', CMD_PING = 'P' };
+enum Command { CMD_NONE = 'X', CMD_BIO = 'B', CMD_NONBIO = 'N', CMD_PING = 'P',
+               // trash in the pickup zone, not at the grab spot yet
+               CMD_AHEAD = 'F', CMD_LEFT = 'L', CMD_RIGHT = 'R' };
 
 char     lastCommand   = CMD_NONE;
 uint32_t lastCommandAt = 0;
@@ -55,6 +63,8 @@ uint32_t piHeardAt     = 0;        // when the latest one arrived
 bool     usbHeard      = false;    // the same, for USB
 uint32_t usbHeardAt    = 0;
 bool     pickupBusy    = false;   // true while the arm sequence is running
+bool     approaching   = false;   // AUTO stopped for trash ahead, stepping up to it
+bool     stepPending   = false;   // an F/L/R arrived and its step has not run yet
 bool     manualMode    = true;    // stopped until the init countdown ends or 'A'
 char     manualMove    = 0;       // drive command running: '8' '2' '4' '6', 0 = none
 uint32_t manualMoveAt  = 0;       // when it was last sent
@@ -182,14 +192,92 @@ void loop() {
     // one pickup. Before SORTED, so anything after SORTED is new.
     readSerialCommand();
     lastCommand = CMD_NONE;
+    approaching = false;
+    stepPending = false;
     Link.print(F("SORTED "));
     Link.print(classLabel(item));
     Link.println(F(" - arm down, gate home"));
     return;
   }
 
+  // F/L/R: trash in the pickup zone, not yet at the grab spot - step to it.
+  if (serviceApproach()) return;
+
   lcdRow(0, F("AUTO driving"));
   driveForward();
+}
+
+bool isApproachCommand(char c) {
+  return c == CMD_AHEAD || c == CMD_LEFT || c == CMD_RIGHT;
+}
+
+/*
+ * Every AUTO loop: drive up to trash the Pi sees in the pickup zone. The Pi
+ * sends F (straight ahead), L or R (off to that side) for each frame while
+ * the item is in the zone and short of the grab spot, then B/N once it is
+ * there - and loop() picks it up. Returns true while the wheels belong to
+ * the approach, false to let the rover cruise.
+ *
+ *  - The first F/L/R only stops the rover. It came from a frame taken while
+ *    cruising, and the rover has moved on since; the Pi looks again.
+ *  - After that, each F/L/R is one short step, then the rover waits stopped
+ *    for the next one. The Pi waits for the step to end before it looks.
+ *  - X (lost the item) or a silent Pi: stay stopped APPROACH_HOLD_MS, so one
+ *    missed frame does not send the rover driving over the item, then cruise.
+ */
+bool serviceApproach() {
+  if (isApproachCommand(lastCommand) && isCommandFresh()) {
+    if (!approaching) {
+      approaching = true;
+      stepPending = false;
+      driveStop();
+      lcdRow(0, F("APPROACH look"));
+      Link.println(F("APPROACH - trash ahead, stopped to look again"));
+    } else if (stepPending) {
+      stepPending = false;
+      approachStep(lastCommand);
+    }
+    return true;
+  }
+
+  if (!approaching) return false;
+  if (millis() - lastCommandAt < APPROACH_HOLD_MS) {
+    driveStop();
+    lcdRow(0, F("APPROACH lost?"));
+    return true;
+  }
+  approaching = false;
+  Link.println(F("APPROACH - trash lost, driving on"));
+  return false;
+}
+
+// One approach move, then stop. Keeps reading serial like avoidObstacle(),
+// so a 5 stops it at once.
+void approachStep(char c) {
+  uint16_t ms = APPROACH_TURN_MS;
+  switch (c) {
+    case CMD_AHEAD: lcdRow(0, F("APPROACH forward")); driveForward();   ms = APPROACH_STEP_MS; break;
+    case CMD_LEFT:  lcdRow(0, F("APPROACH left"));    driveTurnLeft();  break;
+    default:        lcdRow(0, F("APPROACH right"));   driveTurnRight(); break;
+  }
+  uint32_t start = millis();
+  while (millis() - start < ms) {
+    heartbeat();
+    readSerialCommand();
+    lcdService();
+    if (manualMode) return;   // a command took over and has already stopped the wheels
+    delay(1);
+  }
+  driveStop();
+  lcdRow(0, F("APPROACH look"));
+}
+
+const __FlashStringHelper *approachName(char c) {
+  switch (c) {
+    case CMD_AHEAD: return F("step forward");
+    case CMD_LEFT:  return F("turn left");
+    default:        return F("turn right");
+  }
 }
 
 /*
@@ -214,7 +302,7 @@ const uint16_t JUNK_QUIET_MS = 2000;  // after junk is reported, more is ignored
 // Every letter runCommand() acts on, plus the P heartbeat. A line that is
 // not one of these, or a word from wordToCommand(), is junk. A new command
 // letter goes here as well as into runCommand()'s switch.
-const char COMMAND_CHARS[] PROGMEM = "BNXP82465UDHCO790A?";
+const char COMMAND_CHARS[] PROGMEM = "BNXPFLR82465UDHCO790A?";
 
 void readSerialCommand() {
   while (Serial1.available() > 0) rxChar(fromPi,  Serial1.read());
@@ -256,11 +344,12 @@ void endLine(LineIn &in) {
   char c   = in.tooLong ? 0 : commandFor(in.text);
 
   if (c) {
-    // Only what vision.py sends - P, B, N, X - shows the vision pipeline is
-    // alive, and only on the Pi's wire is it the Pi. A 5 or ? typed on the
-    // Serial Monitor is neither: it used to read "Pi OK", then "Pi: lost",
-    // with no Pi wired at all.
-    if (c == CMD_PING || c == CMD_BIO || c == CMD_NONBIO || c == CMD_NONE) {
+    // Only what vision.py sends - P, B, N, X, F, L, R - shows the vision
+    // pipeline is alive, and only on the Pi's wire is it the Pi. A 5 or ?
+    // typed on the Serial Monitor is neither: it used to read "Pi OK", then
+    // "Pi: lost", with no Pi wired at all.
+    if (c == CMD_PING || c == CMD_BIO || c == CMD_NONBIO || c == CMD_NONE ||
+        isApproachCommand(c)) {
       if (&in == &fromPi) { piHeard  = true; piHeardAt  = millis(); }
       else                { usbHeard = true; usbHeardAt = millis(); }
     }
@@ -331,6 +420,21 @@ void runCommand(char c) {
       Link.println();
       break;
 
+    // From the Pi: trash in the pickup zone, short of the grab spot. Each
+    // one is one step - serviceApproach() runs it.
+    case CMD_AHEAD:
+    case CMD_LEFT:
+    case CMD_RIGHT:
+      lastCommand   = c;
+      lastCommandAt = millis();
+      lastSeen      = c;
+      stepPending   = true;
+      Link.print(F("OK trash ahead - "));
+      Link.print(approachName(c));
+      if (manualMode) Link.print(F(" - not in MANUAL, send A"));
+      Link.println();
+      break;
+
     // Manual driving - each command runs MANUAL_MOVE_MS, then stops.
     case '8':
     case '2':
@@ -367,6 +471,8 @@ void enterManual() {
   cancelAutoStart();
   driveStop();
   manualMove = 0;
+  approaching = false;
+  stepPending = false;
   if (manualMode) return;
   manualMode = true;
   Link.println(F("MANUAL - wheels stopped, send A to resume"));
@@ -460,6 +566,7 @@ void printStatus() {
   readAllDistances();
   Link.print(F("STATUS "));
   Link.print(manualMode ? F("MANUAL") : F("AUTO"));
+  if (approaching) Link.print(F(" approaching trash"));
   Link.print(F(", manual move: "));
   Link.print(manualMove ? moveName(manualMove) : F("none"));
   Link.print(F(", conveyor "));
@@ -504,6 +611,8 @@ void resumeAuto() {
   manualMode  = false;
   manualMove  = 0;
   lastCommand = CMD_NONE;
+  approaching = false;
+  stepPending = false;
   conveyorStop();
   cameraLookAhead();
 }
@@ -547,9 +656,11 @@ void printHelp() {
   Link.println(F("          7 or LOOKLEFT  9 or LOOKRIGHT  0 or LOOKAHEAD - camera"));
   Link.println(F("          H home     C conveyor on  O conveyor off"));
   Link.println(F("          A autonomous  ? this list + status"));
-  Link.println(F("          B bio      N non-bio    X none"));
+  Link.println(F("          B bio      N non-bio    X none   - at the grab spot: pick up"));
+  Link.println(F("          F L R trash ahead: one step forward / turn left / turn right"));
   Link.println(F("          P heartbeat the Pi sends every second - no reply"));
   Link.println(F("replies:  RX received, OK done, FAIL refused, DONE/STOP move ended"));
+  Link.println(F("          APPROACH stepping up to trash"));
   Link.println(F("          PICKUP/SORTED a pickup started / its item is in the bin"));
 }
 

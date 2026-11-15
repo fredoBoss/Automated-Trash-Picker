@@ -130,6 +130,9 @@ const __FlashStringHelper *classLabel(char command) {
   switch (command) {
     case CMD_BIO:    return F("BIO");
     case CMD_NONBIO: return F("NON-BIO");
+    case CMD_AHEAD:
+    case CMD_LEFT:
+    case CMD_RIGHT:  return F("ahead");
     default:         return F("nothing");
   }
 }
