@@ -7,7 +7,7 @@ same commands the firmware takes (arduino/main/main.ino):
 
     8 2 4 6 5   forward / backward / left / right / stop  (or FORWARD, BACK,
                 LEFT, RIGHT, STOP)
-    U D S R H   lift up / lift down / stretch out / retract / home
+    U D H       lift up / lift down / home
     7 9 0       camera 45 deg left / 45 deg right / straight ahead  (or
                 LOOKLEFT, LOOKRIGHT, LOOKAHEAD)
     C O         conveyor on / off
@@ -32,6 +32,10 @@ import time
 import serial_link
 from config import CFG
 
+# Longest the Mega takes to start reading a command: its part checks after a
+# reset, ~3 s, plus 2 s for each sonar that does not answer.
+ACK_TIMEOUT_S = 10.0
+
 
 def main():
     p = argparse.ArgumentParser(description="RoboSort Mega console")
@@ -41,18 +45,20 @@ def main():
     p.add_argument("--auto", action="store_true",
                    help="let the start-up countdown run - the rover WILL drive")
     p.add_argument("--wait", type=float, default=2.0,
-                   help="seconds to show replies after each command (default 2)")
+                   help="seconds to show replies once the Mega has taken each "
+                        "command (default 2)")
     args = p.parse_args()
 
     link = serial_link.SerialLink(args.port, CFG.baud_rate, CFG.serial_retries)
     try:
         if not args.auto:
             link.send("5", force=True)       # cancels the countdown: stay put
-            time.sleep(0.5)
+            link.wait_rx(ACK_TIMEOUT_S)      # it is read only once the part checks end
 
         if args.commands:
             for command in args.commands:
                 link.send(command, force=True)
+                link.wait_rx(ACK_TIMEOUT_S)
                 time.sleep(args.wait)
             return
 
