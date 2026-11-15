@@ -3,11 +3,11 @@ RoboSort - Ultrasonic Range Test (Orange Pi 1)
 Bench test for a single HC-SR04. Prints a distance reading once per
 second until Ctrl+C.
 
-NOTE: in the shipped design all 4 ultrasonics live on the Arduino Mega,
-because obstacle avoidance has to halt the rover without waiting on the
-Pi. Linux is not real-time - a scheduler stall here shows up as a wrong
-distance, not a late one. This script is for bench-checking a sensor,
-not for the avoidance loop.
+NOTE: in the shipped design both ultrasonics (left and right) live on
+the Arduino Mega, because obstacle avoidance has to halt the rover
+without waiting on the Pi. Linux is not real-time - a scheduler stall
+here shows up as a wrong distance, not a late one. This script is for
+bench-checking a sensor, not for the avoidance loop.
 
 WIRING (Orange Pi One 40-pin header - same header as Orange Pi PC)
     VCC   -> Arduino Mega 5V   sensor needs 5V, 3.3V will not fire it
