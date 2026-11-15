@@ -686,8 +686,7 @@ bool isCommandFresh() {
  *     left blocked   -> turn right
  *     both blocked   -> back out first, then turn toward whichever side
  *                       has more room
- * A turn runs TURN_MS - left a spin in place, right a pivot that also
- * moves forward (see motorControl.ino). The next loop reads the sensors
+ * A turn is a spin in place for TURN_MS. The next loop reads the sensors
  * again, so a turn that was not enough is simply followed by another.
  * The back-up blocks, but the turn is long, so it keeps the heartbeat and
  * the serial commands going: a 5 sent mid-turn stops the rover at once,

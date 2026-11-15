@@ -64,16 +64,14 @@ void driveTurnLeft() {
 }
 
 /*
- * Turn right while moving forward: left motor (back-left) forward, right
- * motor (front-right) stopped - its relays off short the motor, so the
- * wheel brakes and the rover pivots clockwise around it.
- * Not a spin: with the right motor backward the rover crept backward on
- * the floor. The front-right wheel grips better than the back-left (the
- * arm, scoop and belt load the front), so its backward push won. Turn left
- * does not have this: there the front-right wheel drives forward.
+ * Spin right: left motor (back-left) forward, right motor (front-right)
+ * backward - clockwise, the exact mirror of driveTurnLeft().
+ * On the floor this spin has crept backward: the front-right wheel grips
+ * best, and here it runs backward. If that is a problem, drive(1, 0) - the
+ * right motor stopped - pivots right while moving forward instead.
  */
 void driveTurnRight() {
-  drive(1, 0);
+  drive(1, -1);
 }
 
 void driveStop() {
