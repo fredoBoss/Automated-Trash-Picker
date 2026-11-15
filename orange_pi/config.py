@@ -25,8 +25,11 @@ PROFILES = {
         "serial_port": "/dev/ttyUSB0",
         "display": False,           # headless over SSH, no X server
         # All 4 cores took the H3 to 105 C in under a minute with no heatsink,
-        # and the kernel powered the Pi off. 2 cores halve the heat.
-        "threads": 2,
+        # and the kernel powered the Pi off. Measured on the live camera with
+        # the thermal guard, 4 min each: 2 cores ran 0.69 s/frame but paused
+        # 81% of the time (15 frames/min); 1 core ran 1.13 s/frame and paused
+        # 5% (48 frames/min). Back to 2 once the Pi has a heatsink.
+        "threads": 1,
         # vision.py pauses inference here and resumes 7 C lower. The kernel
         # throttles from 75 C and powers off at 105 C. With no heatsink this
         # Pi idles at ~85 C (480 MHz, but the CPU stays at 1.3 V), so a lower
