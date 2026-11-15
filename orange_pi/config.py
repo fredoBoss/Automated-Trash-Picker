@@ -77,13 +77,15 @@ class Config:
         )
 
 
-# Where trash sits in the frame when the arm can grab it, as (x1, y1, x2, y2)
-# fractions of the frame. Measured from a frame of the rover's own camera,
-# looking straight ahead, with the grab spot marked on it: the mark covered
-# x 247-337, y 405-444 of 640x480. The zone is that mark, 0.025 wider each
-# side for small misalignment. Only valid while the camera mount does not
-# move - re-measure after touching the mast or the camera's tilt.
-PICKUP_ZONE = (0.36, 0.84, 0.55, 0.93)
+# Where trash must be in the frame for B/N to go out, as (x1, y1, x2, y2)
+# fractions of the frame. Drawn on a 640x480 frame of the rover's own camera
+# (2026-11-15): the floor ahead of the scoop, x 143-464, y 227-415. The Mega
+# stops and lifts the arm the moment B/N arrives - it does not drive up to
+# the item - so trash in the top part of this zone is still ahead of the
+# scoop when the arm comes up. The grab spot alone, the zone before, was
+# (0.36, 0.84, 0.55, 0.93). Only valid while the camera mount does not move -
+# re-measure after touching the mast or the camera's tilt.
+PICKUP_ZONE = (0.22, 0.47, 0.73, 0.87)
 
 
 def _zone(raw: str | None) -> tuple | None:
