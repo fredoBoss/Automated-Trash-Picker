@@ -3,7 +3,6 @@
 Servo servoLiftL;
 Servo servoLiftR;
 Servo servoSort;
-Servo servoPan;
 
 /*
  * MG996R covers its full 180 deg over roughly 500-2500 us. The library's
@@ -16,8 +15,7 @@ const uint16_t SERVO_MAX_US = 2500;
 
 // ------------------------------------------------------------- angles
 /*
- * The reset angle for the gate and the camera, mid-travel on a 180 deg
- * servo. It is also where the library parks a channel on attach(), so
+ * The gate's reset angle, mid-travel on a 180 deg servo. It is also where the library parks a channel on attach(), so
  * nothing snaps to an unknown position at boot.
  */
 const uint8_t SERVO_HOME = 90;
@@ -29,18 +27,11 @@ const uint8_t SERVO_HOME = 90;
  */
 const uint8_t LIFT_DOWN   = 30;           // arm down - the rest position
 const uint8_t LIFT_UP     = 90;           // arm raised, item scooped up to the belt
-const uint8_t SORT_BIO    = 40;
-const uint8_t SORT_NONBIO = 140;
-
-/*
- * Camera pan: home is straight ahead, the only direction the arm can
- * reach, and it turns 45 deg either way from there. On most servos seen
- * from the horn side, a larger angle turns anticlockwise - to the left.
- * If LOOKLEFT turns the camera right, swap PAN_LEFT and PAN_RIGHT.
- */
-const uint8_t PAN_HOME  = SERVO_HOME;   // 90, looking straight ahead
-const uint8_t PAN_LEFT  = 135;          // home + 45
-const uint8_t PAN_RIGHT = 45;           // home - 45
+// Sort gate: where it swings to send an item to each bin. In MANUAL, 7 / 9
+// put it there and leave it, to check these against the bins; 0 or H
+// brings it home.
+const uint8_t SORT_BIO    = 70;
+const uint8_t SORT_NONBIO = 110;
 
 
 const int8_t LIFT_R_TRIM = 0;   // degrees, applied to the right lift servo
@@ -57,18 +48,12 @@ const uint16_t LIFT_HOLD_MS   = 150;    // after the ramp, let the arm stop swin
 // attach(), so it starts there.
 uint8_t liftAngle = LIFT_DOWN;
 
-/*
- * An SG90 is about 0.1 s per 60 deg, so the widest pan move (left to
- * right, 90 deg) takes ~0.15 s. 300 ms adds time for the camera on the
- * mast to stop wobbling before the next frame is worth classifying.
- */
-const uint16_t PAN_SETTLE_MS = 300;
-uint8_t panAngle = PAN_HOME;          // last angle sent to the pan servo
+uint8_t gateAngle = SERVO_HOME;         // last angle sent to the sort gate
 const uint16_t CONVEYOR_RUN_MS = 10000;  // belt time from the arm to the bin
 
 void servoSetup() {
   // attach() starts a channel at the pulse already loaded, 90 if none.
-  // That is the gate and camera's rest angle but the lift's up, so the
+  // That is the gate's rest angle but the lift's up, so the
   // lift is loaded with LIFT_DOWN first and the arm stays down at
   // power-on instead of jumping up. Before attach() the library maps
   // angles over its default 544-2400 us, a degree or two off, so
@@ -78,7 +63,6 @@ void servoSetup() {
   servoLiftL.attach(PIN_SERVO_LIFT_L, SERVO_MIN_US, SERVO_MAX_US);
   servoLiftR.attach(PIN_SERVO_LIFT_R, SERVO_MIN_US, SERVO_MAX_US);
   servoSort.attach(PIN_SERVO_SORT,    SERVO_MIN_US, SERVO_MAX_US);
-  servoPan.attach(PIN_SERVO_PAN,      SERVO_MIN_US, SERVO_MAX_US);
   liftWrite(LIFT_DOWN);
 
   // Relay pin written to "off" before it becomes an output, so the belt
@@ -117,12 +101,10 @@ void liftMoveTo(uint8_t target) {
   delay(LIFT_HOLD_MS);
 }
 
-// Park every servo, gate and camera included, at its rest angle: the arm
-// down, the gate and the camera at 90.
+// Park every servo at its rest angle: the arm down, the gate at 90.
 void servoResetAll() {
   servoSort.write(SERVO_HOME);
-  servoPan.write(PAN_HOME);
-  panAngle = PAN_HOME;
+  gateAngle = SERVO_HOME;
   liftMoveTo(LIFT_DOWN);
   delay(SERVO_SETTLE_MS);
 }
@@ -149,16 +131,38 @@ void runPickupSequence() {
 // the reset angle rather than picking a bin at random.
 void sortTo(char command) {
   if (command == CMD_BIO) {
-    servoSort.write(SORT_BIO);
+    gateBio();
   } else if (command == CMD_NONBIO) {
-    servoSort.write(SORT_NONBIO);
-  } else {
-    servoSort.write(SERVO_HOME);
+    gateNonBio();
   }
-  delay(SERVO_SETTLE_MS);
+  gateHome();                       // let the item fall, then back to reset
+}
 
-  servoSort.write(SERVO_HOME);      // let the item fall, then back to reset
+// ------------------------------------------------------- sort gate
+// Each returns once the gate has stopped moving. A move to where the gate
+// already is returns at once. sortTo() uses them, and so do the MANUAL
+// test commands 7 / 9 / 0, which leave the gate where they put it.
+void gateTo(uint8_t angle) {
+  if (angle == gateAngle) return;
+  servoSort.write(angle);
+  gateAngle = angle;
   delay(SERVO_SETTLE_MS);
+}
+
+void gateBio()    { gateTo(SORT_BIO);    }
+void gateNonBio() { gateTo(SORT_NONBIO); }
+void gateHome()   { gateTo(SERVO_HOME);  }
+
+// For the STATUS line - main.ino cannot read gateAngle itself.
+uint8_t gatePosition() {
+  return gateAngle;
+}
+
+const __FlashStringHelper *gateName() {
+  if (gateAngle == SORT_BIO)    return F("bio");
+  if (gateAngle == SORT_NONBIO) return F("non-bio");
+  if (gateAngle == SERVO_HOME)  return F("home");
+  return F("?");
 }
 
 
@@ -168,25 +172,6 @@ void armLiftUp() {
 
 void armLiftDown() {
   liftMoveTo(LIFT_DOWN);
-}
-
-// ------------------------------------------------------- camera pan
-// Same contract: each returns once the camera has stopped moving. A move
-// to where the camera already points returns at once.
-void panTo(uint8_t angle) {
-  if (angle == panAngle) return;
-  servoPan.write(angle);
-  panAngle = angle;
-  delay(PAN_SETTLE_MS);
-}
-
-void cameraLookLeft()  { panTo(PAN_LEFT);  }
-void cameraLookRight() { panTo(PAN_RIGHT); }
-void cameraLookAhead() { panTo(PAN_HOME);  }
-
-// For the STATUS line - main.ino cannot read panAngle itself.
-uint8_t cameraAngle() {
-  return panAngle;
 }
 
 /*

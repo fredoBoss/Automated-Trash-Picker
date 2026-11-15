@@ -8,8 +8,8 @@ same commands the firmware takes (arduino/main/main.ino):
     8 2 4 6 5   forward / backward / left / right / stop  (or FORWARD, BACK,
                 LEFT, RIGHT, STOP)
     U D H       lift up / lift down / home
-    7 9 0       camera 45 deg left / 45 deg right / straight ahead  (or
-                LOOKLEFT, LOOKRIGHT, LOOKAHEAD)
+    7 9 0       sort gate to bio / to non-bio / home - it stays there  (or
+                SORTBIO, SORTNONBIO, SORTHOME)
     C O         conveyor on / off
     A           start driving on its own
     ?           command list + a STATUS line

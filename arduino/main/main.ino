@@ -21,9 +21,6 @@ const uint8_t PIN_SERVO_LIFT_L  = 9;
 const uint8_t PIN_SERVO_SORT    = 8;
 const uint8_t PIN_SERVO_LIFT_R  = 12;
 
-
-const uint8_t PIN_SERVO_PAN     = 11;
-
 const uint8_t PIN_TRIG[2] = {36, 34};
 const uint8_t PIN_ECHO[2] = {37, 35};
 
@@ -80,7 +77,7 @@ uint16_t distLeft, distRight;
  * prototypes the Arduino IDE generates for functions taking a LineIn are
  * placed above the first function in the file.
  */
-const uint8_t LINE_MAX = 12;           // longest commands are "LOOKRIGHT" / "LOOKAHEAD"
+const uint8_t LINE_MAX = 12;           // longest command is "SORTNONBIO"
 
 struct LineIn {
   char     text[LINE_MAX + 1];
@@ -130,7 +127,6 @@ void setup() {
   printHelp();
   Link.println(F("INIT drive  - relays off, wheels stopped"));
   Link.println(F("INIT arm    - lift at 30, arm down; sort gate at 90"));
-  Link.println(F("INIT camera - pan servo at 90, looking straight ahead"));
   Link.println(F("INIT belt   - conveyor off"));
   printLcdCheck();
 
@@ -141,11 +137,10 @@ void setup() {
   lcdCheck(F("Drive"),  F("off"),   true);
   lcdCheck(F("Belt"),   F("off"),   true);
   lcdCheck(F("Servos"), F("home"),  true);
-  lcdCheck(F("Camera"), F("ahead"), true);
   printSensorCheck();             // pings both sonars, adds their LCD lines
   Link.print(F("INIT - driving starts in "));
   Link.print(INIT_MS / 1000);
-  Link.println(F(" s. Any drive/arm/camera command cancels it; A starts now."));
+  Link.println(F(" s. Any drive/arm/gate command cancels it; A starts now."));
   initStartedAt = millis();
 }
 
@@ -410,9 +405,9 @@ char wordToCommand(const char *word) {
   if (strcmp_P(word, PSTR("LEFT"))      == 0) return '4';
   if (strcmp_P(word, PSTR("RIGHT"))     == 0) return '6';
   if (strcmp_P(word, PSTR("STOP"))      == 0) return '5';
-  if (strcmp_P(word, PSTR("LOOKLEFT"))  == 0) return '7';
-  if (strcmp_P(word, PSTR("LOOKRIGHT")) == 0) return '9';
-  if (strcmp_P(word, PSTR("LOOKAHEAD")) == 0) return '0';
+  if (strcmp_P(word, PSTR("SORTBIO"))    == 0) return '7';
+  if (strcmp_P(word, PSTR("SORTNONBIO")) == 0) return '9';
+  if (strcmp_P(word, PSTR("SORTHOME"))   == 0) return '0';
   return 0;
 }
 
@@ -462,14 +457,15 @@ void runCommand(char c) {
     // the LCD is set first and shows the move while it runs.
     case 'U': enterManual(); lcdRow(0, F("MANUAL lift up"));   armLiftUp();     ok(F("lift up"));      break;
     case 'D': enterManual(); lcdRow(0, F("MANUAL lift down")); armLiftDown();   ok(F("lift down"));    break;
-    case 'H': enterManual(); lcdRow(0, F("MANUAL home"));      servoResetAll(); ok(F("home - arm down, gate and camera at 90")); break;
+    case 'H': enterManual(); lcdRow(0, F("MANUAL home"));      servoResetAll(); ok(F("home - arm down, gate at 90")); break;
     case 'C': enterManual(); lcdRow(0, F("MANUAL belt on"));   conveyorRun();   ok(F("conveyor on"));  break;
     case 'O': enterManual(); lcdRow(0, F("MANUAL belt off"));  conveyorStop();  ok(F("conveyor off")); break;
 
-    // Camera pan, 45 deg either side of straight ahead.
-    case '7': enterManual(); lcdRow(0, F("MANUAL cam left"));  cameraLookLeft();  ok(F("look left - camera 45 deg left"));   break;
-    case '9': enterManual(); lcdRow(0, F("MANUAL cam right")); cameraLookRight(); ok(F("look right - camera 45 deg right")); break;
-    case '0': enterManual(); lcdRow(0, F("MANUAL cam ahead")); cameraLookAhead(); ok(F("look ahead - camera at 90"));        break;
+    // Sort gate test: swing it to a bin's side and leave it there, to check
+    // it lines up (SORT_BIO / SORT_NONBIO in Servo.ino). 0 or H: back home.
+    case '7': enterManual(); lcdRow(0, F("MANUAL gate bio"));  gateBio();    ok(F("sort gate to bio - stays there, 0 for home"));     break;
+    case '9': enterManual(); lcdRow(0, F("MANUAL gate nbio")); gateNonBio(); ok(F("sort gate to non-bio - stays there, 0 for home")); break;
+    case '0': enterManual(); lcdRow(0, F("MANUAL gate home")); gateHome();   ok(F("sort gate home - at 90"));                         break;
 
     case 'A': resumeAuto(); ok(F("autonomous - driving on its own, send 5 to stop")); break;
     case '?': printHelp(); printStatus(); break;
@@ -585,9 +581,11 @@ void printStatus() {
   Link.print(manualMove ? moveName(manualMove) : F("none"));
   Link.print(F(", conveyor "));
   Link.print(conveyorIsOn() ? F("on") : F("off"));
-  Link.print(F(", camera "));
-  Link.print(cameraAngle());
-  Link.print(F(" deg"));
+  Link.print(F(", gate "));
+  Link.print(gateName());
+  Link.print(F(" ("));
+  Link.print(gatePosition());
+  Link.print(F(" deg)"));
   Link.print(F(", left "));
   Link.print(distLeft);
   Link.print(F(" cm, right "));
@@ -615,10 +613,8 @@ void printStatus() {
  * Back to autonomous. The latched command is dropped on the way out: a B
  * or N that arrived during the bench session would otherwise fire a
  * pickup the moment the rover starts driving again. A belt left running
- * by 'C' is stopped too - in AUTO the pickup sequence owns it. And the
- * camera is turned back to face ahead: the arm only reaches straight
- * ahead, so trash seen with the camera turned aside is not where the arm
- * would grab.
+ * by 'C' is stopped too - in AUTO the pickup sequence owns it - and a
+ * gate left at a bin's side by 7 / 9 goes home, where sortTo() expects it.
  */
 void resumeAuto() {
   autoStartPending = false;
@@ -628,7 +624,7 @@ void resumeAuto() {
   approaching = false;
   stepPending = false;
   conveyorStop();
-  cameraLookAhead();
+  gateHome();
 }
 
 // Every loop: count the init period down once a second, then start
@@ -667,7 +663,7 @@ void cancelAutoStart() {
 void printHelp() {
   Link.println(F("commands: 8 or FORWARD  2 or BACKWARD  4 or LEFT  6 or RIGHT  5 or STOP"));
   Link.println(F("          U lift up  D lift down"));
-  Link.println(F("          7 or LOOKLEFT  9 or LOOKRIGHT  0 or LOOKAHEAD - camera"));
+  Link.println(F("          7 or SORTBIO  9 or SORTNONBIO  0 or SORTHOME - sort gate test"));
   Link.println(F("          H home     C conveyor on  O conveyor off"));
   Link.println(F("          A autonomous  ? this list + status"));
   Link.println(F("          B bio      N non-bio    X none   - at the grab spot: pick up"));

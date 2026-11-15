@@ -74,7 +74,6 @@
   <text x="852" y="300" class="pin" text-anchor="end">D9</text>
   <text x="852" y="360" class="pin" text-anchor="end">D12</text>
   <text x="852" y="420" class="pin" text-anchor="end">D8</text>
-  <text x="852" y="480" class="pin" text-anchor="end">D11</text>
   <text x="852" y="550" class="pin" text-anchor="end">D20</text>
   <text x="852" y="580" class="pin" text-anchor="end">D21</text>
   <text x="852" y="640" class="pin" text-anchor="end">D36</text>
@@ -83,7 +82,7 @@
   <text x="852" y="790" class="pin" text-anchor="end">D35</text>
   <!-- notes inside -->
   <text x="730" y="716" class="s" text-anchor="middle">D13 - on-board LED (heartbeat)</text>
-  <text x="730" y="732" class="s" text-anchor="middle">free: D2-D7, D10, D27, D30-D33</text>
+  <text x="730" y="732" class="s" text-anchor="middle">free: D2-D7, D10, D11, D27, D30-D33</text>
   <text x="700" y="818" class="s" text-anchor="middle">powered from the DC jack</text>
   <text x="700" y="834" class="s" text-anchor="middle">USB-B: laptop only</text>
   <rect x="846" y="826" width="14" height="18" class="res"/>
@@ -154,17 +153,13 @@
   <path d="M860 356 H1000" class="sig"/>
   <rect x="1000" y="398" width="220" height="44" class="box"/>
   <text x="1012" y="417" class="t">Sort gate - MG996R</text>
-  <text x="1012" y="434" class="s">bio 40 deg / non-bio 140 deg</text>
+  <text x="1012" y="434" class="s">bio 70 deg / non-bio 110 deg</text>
   <path d="M860 416 H1000" class="sig"/>
-  <rect x="1000" y="458" width="220" height="44" class="box"/>
-  <text x="1012" y="477" class="t">Camera pan - SG90</text>
-  <text x="1012" y="494" class="s">mast, home 90 deg, +/-45 deg</text>
-  <path d="M860 476 H1000" class="sig"/>
   <!-- servo power bus -->
   <path d="M1270 284 V980" class="vp"/>
   <path d="M1290 304 V980" class="gnd"/>
-  <path d="M1220 288 H1270 M1220 348 H1270 M1220 408 H1270 M1220 468 H1270" class="vp"/>
-  <path d="M1220 312 H1290 M1220 372 H1290 M1220 432 H1290 M1220 492 H1290" class="gnd"/>
+  <path d="M1220 288 H1270 M1220 348 H1270 M1220 408 H1270" class="vp"/>
+  <path d="M1220 312 H1290 M1220 372 H1290 M1220 432 H1290" class="gnd"/>
   <text x="1304" y="300" class="t">servo power bus</text>
   <text x="1304" y="318" class="s">red: V+ 5-6 V from Buck B</text>
   <text x="1304" y="334" class="s">black: GND</text>
@@ -246,8 +241,8 @@
   <!-- buck B -->
   <rect x="1150" y="980" width="200" height="64" class="pwr"/>
   <text x="1162" y="1001" class="t">Buck B - 5-6 V, 5 A+</text>
-  <text x="1162" y="1019" class="s">→ servo bus (3x MG996R</text>
-  <text x="1162" y="1035" class="s">+ SG90)</text>
+  <text x="1162" y="1019" class="s">→ servo bus</text>
+  <text x="1162" y="1035" class="s">(3x MG996R)</text>
   <path d="M1250 1044 V1066" class="gnd"/>
   <text x="20" y="1094" class="t">Common ground</text>
   <text x="20" y="1112" class="s">Battery -, every buck -, Mega GND, both relay modules, all servos, both sensors and the LCD must be joined. The UART's GND wire joins the Pi's ground to the Mega's.</text>
