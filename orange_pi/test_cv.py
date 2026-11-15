@@ -39,7 +39,7 @@ OUTPUT_DIR = ROOT / "output"
 # The trained TRASH model (Leaves, Metal, Paper, Plastic) in weights/ on the
 # laptop. The Pi only receives orange_pi/, so there it falls back to
 # config.py's pick - the NCNN export. --model or ROBOSORT_MODEL override both.
-_WEIGHTS = ROOT / "weights" / "best.pt"
+_WEIGHTS = ROOT / "weights" / "rover.pt"
 DEFAULT_MODEL = (str(_WEIGHTS) if _WEIGHTS.exists() and "ROBOSORT_MODEL" not in os.environ
                  else CFG.model_path)
 
