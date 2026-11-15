@@ -34,6 +34,15 @@ CAMERA_BACKEND = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_V4
 
 MAX_READ_FAILURES = 30      # consecutive dropped frames before giving up
 
+# The driver keeps the frame it captured just after the last read and hands
+# that one over next. On the Pi a read comes once per inference, so that
+# frame is ~1 s old - from before the rover's last approach step. When the
+# caller has been away longer than STALE_S, frames are grabbed and dropped
+# until a grab has to wait for the camera: that one was captured just now.
+STALE_S = 0.1
+GRAB_WAITED_S = 0.008       # a queued frame comes back faster than this
+FLUSH_MAX = 5               # at most this many grabs to reach a fresh frame
+
 # Highest first - probing for "max" takes the first one the camera accepts.
 RESOLUTION_LADDER = [
     (1920, 1080), (1280, 720), (1024, 768),
@@ -153,6 +162,24 @@ class CameraSource:
             raise RuntimeError(f"Camera {index} opened but returned no frames.")
         self.width, self.height = size
         self.is_live = True
+        self._last_read = time.perf_counter()
+
+    def _read_fresh(self):
+        """cap.read(), but never a frame left waiting in the driver from
+        before a long pause - see STALE_S. Back to back, as in a live
+        window on the laptop, it is a plain read."""
+        if time.perf_counter() - self._last_read > STALE_S:
+            for _ in range(FLUSH_MAX):
+                start = time.perf_counter()
+                if not self.cap.grab():
+                    break
+                if time.perf_counter() - start > GRAB_WAITED_S:
+                    break                   # it waited for the camera: a new frame
+            ok, frame = self.cap.retrieve()
+        else:
+            ok, frame = self.cap.read()
+        self._last_read = time.perf_counter()
+        return ok, frame
 
     def _apply_capture_size(self, capture: str) -> tuple[int, int] | None:
         """Returns a (w, h) to downscale to later, or None to pass frames
@@ -193,7 +220,7 @@ class CameraSource:
         started = time.perf_counter()
 
         while True:
-            ok, frame = self.cap.read()
+            ok, frame = self._read_fresh()
             if not ok:
                 # A dropped frame is normal on USB cams; a stream of them means
                 # the camera is gone - unplugged, or grabbed by another app.
