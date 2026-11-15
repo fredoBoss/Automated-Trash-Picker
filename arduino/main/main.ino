@@ -45,7 +45,7 @@ const uint32_t CMD_TIMEOUT_MS = 5000; // Pi silence before we assume no target
 // stopped for the Pi's next look. Short, so an item cannot jump past the
 // grab spot between two looks - lengthen them if the rover barely moves.
 const uint16_t APPROACH_STEP_MS = 250;  // forward step toward trash
-const uint16_t APPROACH_TURN_MS = 150;  // spin step to centre trash left/right
+const uint16_t APPROACH_TURN_MS = 150;  // turn step to centre trash left/right
 const uint16_t APPROACH_HOLD_MS = 3000; // trash lost mid-approach: stay stopped this long
 
 // ------------------------------------------------------------- state
@@ -676,7 +676,8 @@ bool isCommandFresh() {
  *     left blocked   -> turn right
  *     both blocked   -> back out first, then turn toward whichever side
  *                       has more room
- * A turn is a spin in place for TURN_MS. The next loop reads the sensors
+ * A turn runs TURN_MS - left a spin in place, right a pivot that also
+ * moves forward (see motorControl.ino). The next loop reads the sensors
  * again, so a turn that was not enough is simply followed by another.
  * The back-up blocks, but the turn is long, so it keeps the heartbeat and
  * the serial commands going: a 5 sent mid-turn stops the rover at once,
