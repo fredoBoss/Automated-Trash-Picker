@@ -99,11 +99,14 @@ class _UltralyticsBackend:
 
     fixed_size = None
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, threads: int = 0):
         # Imported late: ultralytics takes seconds to load, and bench.py wants
         # that cost outside the measured loop.
         from ultralytics import YOLO
 
+        if threads:
+            import torch
+            torch.set_num_threads(threads)
         self.model = YOLO(str(path))
 
     def predict(self, frame, imgsz) -> list[tuple[str, float, tuple]]:
@@ -130,7 +133,7 @@ class _NcnnBackend:
     highest-scoring box.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, threads: int = 0):
         import ncnn
         import numpy as np
 
@@ -139,7 +142,8 @@ class _NcnnBackend:
 
         self.net = ncnn.Net()
         self.net.opt.use_vulkan_compute = False     # no usable GPU on the Pi
-        self.net.opt.num_threads = os.cpu_count() or 1
+        # Fewer threads, less heat: the Pi's H3 overheats on all 4 cores.
+        self.net.opt.num_threads = threads or os.cpu_count() or 1
         if (self.net.load_param(str(path / "model.ncnn.param")) != 0
                 or self.net.load_model(str(path / "model.ncnn.bin")) != 0):
             raise SystemExit(f"ncnn could not load the model in {path}")
@@ -231,7 +235,7 @@ def draw_box_and_zone(frame, det: Detection, zone) -> None:
 
 class Classifier:
     def __init__(self, model_path: str, confidence: float, infer_size: int = 320,
-                 zone: tuple | None = None):
+                 zone: tuple | None = None, threads: int = 0):
         path = Path(model_path)
         if not path.exists():
             models = Path(__file__).parent / "models"
@@ -242,9 +246,9 @@ class Classifier:
             )
 
         if (path / "model.ncnn.param").exists():
-            self._backend = _NcnnBackend(path)
+            self._backend = _NcnnBackend(path, threads)
         else:
-            self._backend = _UltralyticsBackend(path)
+            self._backend = _UltralyticsBackend(path, threads)
         self.confidence = confidence
         self.infer_size = infer_size
         self.zone = zone                # None: any detection sends B/N

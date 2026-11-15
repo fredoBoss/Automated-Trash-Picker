@@ -34,6 +34,39 @@ import classify
 import serial_link
 from config import CFG
 
+THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
+# After a pause, resume this many deg C below max_temp. Small, because the
+# Pi with no heatsink idles only ~10 C under the limit and never gets lower.
+COOL_MARGIN = 7
+# Within SLOW_MARGIN of max_temp, rest SLOW_REST_S between frames. Back to
+# back, one or two frames took the bare H3 from 88 C to 96-100 C - past the
+# limit before the next check.
+SLOW_MARGIN = 4
+SLOW_REST_S = 1.0
+
+
+def cpu_temp() -> float | None:
+    """The SoC temperature in deg C; None where there is no such file (Windows)."""
+    try:
+        with open(THERMAL_ZONE) as f:
+            return int(f.read()) / 1000
+    except (OSError, ValueError):
+        return None
+
+
+def cool_down(link, temp: float) -> None:
+    """Too hot: stop running the model until the chip has cooled. Without a
+    heatsink the H3 reached 105 C and the kernel powered the Pi off mid-run.
+    X goes out first, so the Mega does not act on an old sighting. The link's
+    heartbeat runs on its own thread, so the Mega still sees the Pi as alive."""
+    resume = CFG.max_temp - COOL_MARGIN
+    link.send(classify.NONE)
+    print(f"  CPU {temp:.0f} C - pausing the model until it is down to {resume:g} C")
+    start = time.monotonic()
+    while (temp := cpu_temp()) is not None and temp > resume:
+        time.sleep(2)
+    print(f"  CPU {temp:.0f} C - resuming after {time.monotonic() - start:.0f} s")
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="RoboSort vision pipeline")
@@ -71,7 +104,7 @@ def main():
     # Only trash inside the pickup zone sends B/N - the Mega starts a pickup
     # the moment it gets one, and the arm reaches that one spot.
     model = classify.Classifier(args.model, args.conf, args.infer_size,
-                                zone=CFG.pickup_zone)
+                                zone=CFG.pickup_zone, threads=CFG.threads)
     source = capture.open_source(args.source, args.capture)
     link = serial_link.open_link(
         args.port, CFG.baud_rate, CFG.serial_retries, dry_run=args.dry_run
@@ -85,6 +118,18 @@ def main():
     warmed = False
     try:
         for label, frame in source.frames():
+            if CFG.max_temp and (temp := cpu_temp()) is not None:
+                # The warm-up is the heaviest frame (~2 s of full load; it
+                # once took the Pi from 94 C to 102 C), so it starts cool.
+                hot = (temp >= CFG.max_temp if warmed
+                       else temp > CFG.max_temp - COOL_MARGIN)
+                if hot:
+                    cool_down(link, temp)
+                    continue
+                if temp >= CFG.max_temp - SLOW_MARGIN:
+                    time.sleep(SLOW_REST_S)
+                    continue                 # a fresh frame, and a fresh reading
+
             if not warmed:
                 # First inference allocates buffers and takes ~2 s. Burn it
                 # before the loop so the rover is not blind on frame one.

@@ -17,11 +17,21 @@ PROFILES = {
         "camera": "0",              # default webcam
         "serial_port": "COM3",      # fallback only - _find_serial_by_usb_id() picks the Mega
         "display": True,            # a window is fine here
+        "threads": 0,               # every core
+        "max_temp": 0,              # no thermal guard
     },
     "pi": {
         "camera": "0",              # fallback only - _find_camera() picks the USB cam
         "serial_port": "/dev/ttyUSB0",
         "display": False,           # headless over SSH, no X server
+        # All 4 cores took the H3 to 105 C in under a minute with no heatsink,
+        # and the kernel powered the Pi off. 2 cores halve the heat.
+        "threads": 2,
+        # vision.py pauses inference here and resumes 7 C lower. The kernel
+        # throttles from 75 C and powers off at 105 C. With no heatsink this
+        # Pi idles at ~85 C (480 MHz, but the CPU stays at 1.3 V), so a lower
+        # limit would keep the model paused for good.
+        "max_temp": 95,
     },
 }
 
@@ -48,8 +58,8 @@ class Config:
     infer_size: int          # long side fed to the model; 0 = camera native
     serial_retries: int
     pickup_zone: tuple | None    # (x1, y1, x2, y2) fractions of the frame; None = off
-
-
+    threads: int             # CPU cores the model may use; 0 = all of them
+    max_temp: float          # CPU deg C at which vision.py pauses; 0 = never
 
     def describe(self) -> str:
         zone = (",".join(f"{v:.2f}" for v in self.pickup_zone)
@@ -59,7 +69,8 @@ class Config:
             f"serial={self.serial_port}@{self.baud_rate}  "
             f"model={Path(self.model_path).name}  conf={self.confidence}  "
             f"capture={self.capture_size}  infer={self.infer_size or 'native'}  "
-            f"zone={zone}"
+            f"zone={zone}  threads={self.threads or 'all'}  "
+            f"max_temp={f'{self.max_temp:g}C' if self.max_temp else 'off'}"
         )
 
 
@@ -189,6 +200,8 @@ def load() -> Config:
         infer_size=_env("infer_size", 320, int),
         serial_retries=_env("serial_retries", 5, int),
         pickup_zone=_zone(os.environ.get("ROBOSORT_PICKUP_ZONE")),
+        threads=_env("threads", p["threads"], int),
+        max_temp=_env("max_temp", p["max_temp"], float),
     )
 
 

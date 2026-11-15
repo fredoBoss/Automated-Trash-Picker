@@ -258,7 +258,8 @@ def main():
     zone = CFG.pickup_zone if source.is_live else None
     print(f"  zone:   {', '.join(f'{v:.2f}' for v in zone) if zone else 'off'}"
           f"{'  (B/N only inside it)' if zone else ''}\n")
-    model = classify.Classifier(args.model, args.conf, args.infer_size, zone=zone)
+    model = classify.Classifier(args.model, args.conf, args.infer_size, zone=zone,
+                                threads=CFG.threads)
 
     try:
         if source.is_live:

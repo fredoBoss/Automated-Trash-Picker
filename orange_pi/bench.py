@@ -41,7 +41,9 @@ def main():
     print()
 
     load_start = time.perf_counter()
-    model = classify.Classifier(args.model, args.conf, args.infer_size)
+    # The same thread count vision.py ships with, or the number is a lie.
+    model = classify.Classifier(args.model, args.conf, args.infer_size,
+                                threads=CFG.threads)
     print(f"  model load: {(time.perf_counter() - load_start):.1f} s")
 
     source = capture.open_source(args.source, CFG.capture_size)
