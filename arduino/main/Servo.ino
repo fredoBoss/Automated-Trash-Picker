@@ -64,7 +64,7 @@ uint8_t liftAngle = LIFT_DOWN;
  */
 const uint16_t PAN_SETTLE_MS = 300;
 uint8_t panAngle = PAN_HOME;          // last angle sent to the pan servo
-const uint16_t CONVEYOR_RUN_MS = 5000;  // belt time from the arm to the bin
+const uint16_t CONVEYOR_RUN_MS = 10000;  // belt time from the arm to the bin
 
 void servoSetup() {
   // attach() starts a channel at the pulse already loaded, 90 if none.

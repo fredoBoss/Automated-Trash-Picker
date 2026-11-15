@@ -38,7 +38,7 @@ const uint16_t AVOID_CM      = 60;    // AUTO: a side closer than this -> turn a
 const uint16_t STOP_CM       = 20;    // MANUAL: forward refused / cut short closer than this
 const uint16_t BACKUP_MS     = 300;   // both sides blocked: back out first - blind, no rear sensor
 const uint16_t TURN_MS       = 3000;  // how long an avoidance turn runs
-const uint16_t MANUAL_MOVE_MS = 1000; // how long one manual drive command runs
+const uint16_t MANUAL_MOVE_MS = 5000; // how long one manual drive command runs
 const uint16_t INIT_MS       = 10000; // after setup: motors held stopped, then auto start
 const uint32_t CMD_TIMEOUT_MS = 5000; // Pi silence before we assume no target
 // Approach: one F/L/R from the Pi is one short move, then the rover waits
