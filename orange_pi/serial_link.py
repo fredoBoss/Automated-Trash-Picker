@@ -25,6 +25,11 @@ last command that went out, so the B that started the pickup is not
 repeated: an item still in view after a miss is left behind until the
 zone reads X.
 
+F, L and R are the exception to send-on-change. They mean trash is in the
+pickup zone but short of the grab spot, and the Mega takes one short step
+(forward, or a turn toward it) per line it receives - so each one goes out
+every time. vision.py decides when; see its approach notes.
+
 What the Mega sends back (arduino/main/main.ino), one line each:
     RX <line>            a command arrived - printed before it acts
     OK ... / FAIL ...    what it did with it
@@ -56,7 +61,11 @@ Use DryRunLink to exercise the whole pipeline with no Arduino attached.
 import threading
 import time
 
-CMD_NAMES = {"B": "bio", "N": "non-bio", "X": "none"}
+CMD_NAMES = {"B": "bio", "N": "non-bio", "X": "none",
+             "F": "step forward", "L": "turn left", "R": "turn right"}
+# Approach steps: the Mega makes one short move per line, so these go out
+# every time, not only on change.
+STEP_COMMANDS = ("F", "L", "R")
 
 MEGA_BANNER = "RoboSort Mega ready"
 AUTO_LINES = ("AUTO - init done", "OK autonomous")   # the Mega just entered AUTO
@@ -98,7 +107,7 @@ class _BaseLink:
         if self._resync:
             self._resync = False
             force = True
-        if command == self.last_command and not force:
+        if command == self.last_command and not force and command not in STEP_COMMANDS:
             return False
         self._write(command)
         self.last_command = command
