@@ -170,6 +170,13 @@ void loop() {
   if (distLeft < AVOID_CM || distRight < AVOID_CM) {
     driveStop();
     avoidObstacle();
+    // The rover has turned away, so whatever the Pi reported before or
+    // during the turn - a B/N, a step - was about where the item used to
+    // be. Acting on it now would lift at empty floor or step the wrong way.
+    // The Pi's next frame, taken after the turn, starts afresh.
+    lastCommand = CMD_NONE;
+    approaching = false;
+    stepPending = false;
     return;
   }
 
@@ -192,8 +199,13 @@ void loop() {
     // one pickup. Before SORTED, so anything after SORTED is new.
     readSerialCommand();
     lastCommand = CMD_NONE;
-    approaching = false;
     stepPending = false;
+    // Stay stopped for the Pi's first look after the pickup - the hold in
+    // serviceApproach(). A missed item is still at the scoop: the Pi steps
+    // up to it again (vision.py tries twice), where driving on at once
+    // would run onto it before the Pi had looked.
+    approaching   = true;
+    lastCommandAt = millis();
     Link.print(F("SORTED "));
     Link.print(classLabel(item));
     Link.println(F(" - arm down, gate home"));
@@ -222,8 +234,10 @@ bool isApproachCommand(char c) {
  *    cruising, and the rover has moved on since; the Pi looks again.
  *  - After that, each F/L/R is one short step, then the rover waits stopped
  *    for the next one. The Pi waits for the step to end before it looks.
- *  - X (lost the item) or a silent Pi: stay stopped APPROACH_HOLD_MS, so one
- *    missed frame does not send the rover driving over the item, then cruise.
+ *  - X (lost the item): stay stopped APPROACH_HOLD_MS, so one missed frame
+ *    does not send the rover driving over the item, then cruise. A silent
+ *    Pi: stay stopped until the last F/L/R is CMD_TIMEOUT_MS old, then cruise.
+ *  - After a pickup the same hold runs, so the Pi gets one look first.
  */
 bool serviceApproach() {
   if (isApproachCommand(lastCommand) && isCommandFresh()) {
@@ -243,11 +257,11 @@ bool serviceApproach() {
   if (!approaching) return false;
   if (millis() - lastCommandAt < APPROACH_HOLD_MS) {
     driveStop();
-    lcdRow(0, F("APPROACH lost?"));
+    lcdRow(0, F("APPROACH wait"));
     return true;
   }
   approaching = false;
-  Link.println(F("APPROACH - trash lost, driving on"));
+  Link.println(F("APPROACH - nothing to pick up, driving on"));
   return false;
 }
 
