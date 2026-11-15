@@ -30,10 +30,12 @@ Usage:
 """
 
 import argparse
+import os
 import time
 
 import capture
 import classify
+import config
 import serial_link
 from config import CFG
 
@@ -122,6 +124,24 @@ def cool_down(link, temp: float) -> None:
     print(f"  CPU {temp:.0f} C - resuming after {time.monotonic() - start:.0f} s")
 
 
+def wait_for_camera(source: str) -> str:
+    """On the Pi with no USB camera plugged in, wait here until there is one
+    and return its index. Exiting instead makes systemd start this program
+    again every 10 s, and each start - Python, OpenCV - is ~9 s of full CPU
+    on the Pi: with no heatsink that took the H3 to 101 C, in a loop.
+    Anything named on purpose (--source, ROBOSORT_CAMERA) is used as given."""
+    if CFG.profile != "pi" or source != CFG.camera or "ROBOSORT_CAMERA" in os.environ:
+        return source
+    found = config.find_camera(None)
+    if found is None:
+        print("No USB camera plugged in - waiting for one (no restart needed).")
+        while (found := config.find_camera(None)) is None:
+            time.sleep(3)
+        time.sleep(2)                # let it finish setting up
+        print(f"USB camera found: index {found}")
+    return found
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="RoboSort vision pipeline")
     p.add_argument("--source", default=CFG.camera,
@@ -155,6 +175,9 @@ def main():
 
     print(f"RoboSort vision  [{CFG.describe()}]")
 
+    # The camera first, so a missing one is waited for before the model
+    # load - seconds of full CPU on the Pi.
+    source = capture.open_source(wait_for_camera(args.source), args.capture)
     # Only trash at the grab spot sends B/N - the Mega starts a pickup the
     # moment it gets one, and the arm reaches that one spot. Elsewhere in
     # the zone it is F/L/R, a step toward it.
@@ -162,7 +185,6 @@ def main():
                                 zone=CFG.pickup_zone, threads=CFG.threads,
                                 grab=CFG.grab_spot)
     pilot = Pilot()
-    source = capture.open_source(args.source, args.capture)
     link = serial_link.open_link(
         args.port, CFG.baud_rate, CFG.serial_retries, dry_run=args.dry_run
     )

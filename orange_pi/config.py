@@ -21,7 +21,7 @@ PROFILES = {
         "max_temp": 0,              # no thermal guard
     },
     "pi": {
-        "camera": "0",              # fallback only - _find_camera() picks the USB cam
+        "camera": "0",              # fallback only - find_camera() picks the USB cam
         "serial_port": "/dev/ttyUSB0",
         "display": False,           # headless over SSH, no X server
         # All 4 cores took the H3 to 105 C in under a minute with no heatsink,
@@ -162,7 +162,7 @@ def _find_serial_by_usb_id(default: str) -> str:
     return default
 
 
-def _find_camera(default: str) -> str:
+def find_camera(default: str | None) -> str | None:
     """The USB webcam's index on the Pi. It is not /dev/video0 there: the H3's
     hardware video decoder (cedrus) registers first and takes that node. A
     UVC cam adds two nodes - the image stream (index 0) and a metadata node -
@@ -198,7 +198,7 @@ def load() -> Config:
 
     return Config(
         profile=profile,
-        camera=_env("camera", _find_camera(p["camera"])
+        camera=_env("camera", find_camera(p["camera"])
                     if profile == "pi" else p["camera"]),
         serial_port=_env("serial_port", _find_serial(p["serial_port"])
                          if profile == "pi" else _find_serial_by_usb_id(p["serial_port"])),
