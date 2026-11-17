@@ -33,10 +33,10 @@ PROFILES = {
         # At this temperature vision.py turns the model off for 30 s
         # (vision.py COOL_PAUSE_S) and the Mega stops the wheels meanwhile.
         # The kernel throttles from 75 C and powers off at 105 C; one frame
-        # can add 5-8 C, so 94 leaves room. With no heatsink this Pi idles at
-        # ~85 C (the CPU stays at 1.3 V), so a much lower limit would keep the
-        # model off for good.
-        "max_temp": 94,
+        # can add 5-8 C. With the fan it runs at 63-76 C (2026-11-18), so 90
+        # leaves the model on in normal use; the warm-up waits for 83 C and
+        # frames are spaced from 86 C (vision.py COOL_MARGIN / SLOW_MARGIN).
+        "max_temp": 90,
     },
 }
 
@@ -208,7 +208,10 @@ def load() -> Config:
         baud_rate=_env("baud_rate", 9600, int),
         display=_env("display", p["display"], bool),
         model_path=_env("model", _find_model()),
-        confidence=_env("confidence", 0.55, float),
+        # 0.55 turned real items on the floor into X: rover-data-v4 on the
+        # Pi scored Paper 0.44 / 0.52 and Metal 0.53 on items in view
+        # (2026-11-18). ROBOSORT_CONFIDENCE overrides.
+        confidence=_env("confidence", 0.45, float),
         # Pinned, not "native": the driver default is machine-specific, and
         # laptop and Pi must feed the model identical frames. 640x480 is 2x
         # the 320 training size (a clean downscale) and is the one resolution

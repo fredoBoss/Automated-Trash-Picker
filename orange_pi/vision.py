@@ -68,6 +68,11 @@ MAX_PICKUP_TRIES = 2
 # taken for trash never gets nearer - without a cap the rover would turn
 # toward it for ever.
 MAX_APPROACH_STEPS = 40
+# After giving up on an item, try it again this long later. Steps are counted
+# whether or not the Mega acts on them, and in MANUAL - or during the start-up
+# countdown - it ignores every one: the Pi gave up on trash in plain view
+# after ~76 s and the LCD read "nothing" until the item left the camera.
+GIVE_UP_RETRY_S = 30.0
 
 
 class Pilot:
@@ -78,22 +83,34 @@ class Pilot:
         grab spot while driving sends F instead: the Mega stops on its first
         F (main.ino serviceApproach), and the next frame decides.
       - At most MAX_PICKUP_TRIES pickups and MAX_APPROACH_STEPS steps per
-        item, then X until a frame with no trash in reach."""
+        item, then X - until a frame with no trash in reach, or until
+        GIVE_UP_RETRY_S has passed, when the item gets a fresh start."""
 
-    def __init__(self):
+    def __init__(self, clock=time.monotonic):
         self.tries = 0
         self.steps = 0
+        self.gave_up_at: float | None = None
+        self._clock = clock
 
     @property
     def gave_up(self) -> bool:
         return self.tries >= MAX_PICKUP_TRIES or self.steps >= MAX_APPROACH_STEPS
 
+    def _reset(self) -> None:
+        self.tries = self.steps = 0
+        self.gave_up_at = None
+
     def command(self, seen: str, last_sent: str | None) -> str:
         if seen == classify.NONE:
-            self.tries = self.steps = 0
+            self._reset()
             return classify.NONE
         if self.gave_up:
-            return classify.NONE
+            if self.gave_up_at is None:
+                self.gave_up_at = self._clock()
+            if self._clock() - self.gave_up_at < GIVE_UP_RETRY_S:
+                return classify.NONE
+            print(f"  retrying the item it gave up on {GIVE_UP_RETRY_S:.0f} s ago")
+            self._reset()
         if seen in (classify.BIO, classify.NON_BIO) and last_sent not in classify.APPROACH:
             return classify.AHEAD
         return seen
