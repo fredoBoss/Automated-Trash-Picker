@@ -11,8 +11,17 @@ static void relaySet(uint8_t pin, bool on) {
   digitalWrite(pin, on ? HIGH : LOW);
 }
 
+// The left motor (back-left wheel) is wired the other way round: on 2026-11-18
+// an 8 ran the front wheel forward and the back wheel backward, and a 2 the
+// reverse. Flipping it here fixes every move at once - forward, backward,
+// both turns, AUTO and the approach steps - where swapping the 8/2/4/6
+// letters would have left AUTO's driveForward() spinning in place.
+// Rewire the motor's two leads instead and set this back to false.
+const bool LEFT_MOTOR_REVERSED = true;
+
 // One side. dir is +1 forward, -1 backward, 0 stop.
 static void sideWrite(bool left, int8_t dir) {
+  if (left && LEFT_MOTOR_REVERSED) dir = -dir;
   relaySet(left ? PIN_L_IN1 : PIN_R_IN1, dir > 0);
   relaySet(left ? PIN_L_IN2 : PIN_R_IN2, dir < 0);
 }
