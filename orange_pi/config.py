@@ -97,10 +97,12 @@ PICKUP_ZONE = (0.00, 0.08, 1.00, 0.86)
 # GRAB_SPOT: B/N - lift and belt - once the item's centre is in its columns
 # and the item's near edge (its box's bottom) has reached its top edge, where
 # the floor meets the scoop. Move the top edge (y1) to where an item has to
-# be for the lift to catch it. Its bottom edge is drawn but not used. Set as
-# the middle third and bottom third of the (0.22, 0.47, 0.73, 0.87) zone,
-# and kept when the zone grew.
-GRAB_SPOT = (0.39, 0.74, 0.56, 0.87)
+# be for the lift to catch it. Its bottom edge is drawn but not used.
+# Drawn by hand on a test_cv.py frame (2026-11-18) over the whole scoop
+# mouth: x 212-409, top 337 of 640x480. Before that (0.39, 0.74, 0.56,
+# 0.87), the middle third of an older zone - narrower than the scoop, so
+# items it could catch were stepped toward instead.
+GRAB_SPOT = (0.33, 0.64, 0.64, 0.87)
 
 
 def _zone(raw: str | None, default: tuple, name: str) -> tuple | None:

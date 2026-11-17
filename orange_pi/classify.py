@@ -343,6 +343,10 @@ class Classifier:
 
         # The best box overall - unless a zone is set and something worth
         # picking up is inside it, which wins over a stronger box elsewhere.
+        # Among those, one already at the grab spot wins over the rest, and
+        # then the most confident: a sure box on the far floor kept the rover
+        # stepping toward it while a crumpled paper sat at the scoop, never
+        # lifted.
         best = max(found, key=lambda d: d[1], default=None)
         if self.zone is not None:
             reachable = [
@@ -352,7 +356,8 @@ class Classifier:
                 and self._in_reach(d[2])
             ]
             if reachable:
-                best = max(reachable, key=lambda d: d[1])
+                best = max(reachable, key=lambda d: (
+                    self.grab is not None and at_grab(d[2], self.grab), d[1]))
 
         if best is None:
             return Detection(None, 0.0, NONE, latency_ms)
