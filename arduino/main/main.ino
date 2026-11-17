@@ -78,6 +78,10 @@ uint32_t piTempAt      = 0;
 bool     piTempKnown   = false;
 uint32_t coolStartedAt = 0;
 uint32_t coolMs        = 0;       // 0 = no cool-down
+// The cool-down stopped AUTO: MANUAL, as a 5 would, but the belt keeps
+// running, and A goes out by itself when it is over. Any command typed
+// meanwhile (5, 8, ...) cancels that, and the rover stays in MANUAL.
+bool     coolHold      = false;
 bool     pickupBusy    = false;   // true while the arm sequence is running
 bool     approaching   = false;   // AUTO stopped for trash ahead, stepping up to it
 bool     stepPending   = false;   // an F/L/R arrived and its step has not run yet
@@ -172,20 +176,11 @@ void loop() {
   // Manual: nothing below runs, so a manual move is not undone by the
   // navigation logic. Only a drive command in progress needs watching.
   if (manualMode) {
+    if (coolHold) {
+      serviceCoolHold();
+      return;
+    }
     serviceManualMove();
-    return;
-  }
-
-  // The Pi has turned its model off to cool: driving on with the camera off
-  // ran the rover past trash, so the wheels stay stopped until the cool-down
-  // is over. Whatever it reported before is stale by then; its next frame
-  // starts afresh.
-  if (piCoolingNow()) {
-    driveStop();
-    lastCommand = CMD_NONE;
-    approaching = false;
-    stepPending = false;
-    lcdCooling((coolMs - (millis() - coolStartedAt) + 999) / 1000);
     return;
   }
 
@@ -427,17 +422,25 @@ void endLine(LineIn &in) {
     in.len = 0;
     return;
   }
-  // W<seconds>: the Pi turned its model off to cool - loop() keeps the
-  // wheels stopped until it is over.
+  // W<seconds>: the Pi turned its model off to cool. Driving on with the
+  // camera off ran the rover past trash, so in AUTO it stops as a 5 would -
+  // MANUAL, belt still running - shows COOLDOWN counting down, and sends
+  // itself A when it is over (serviceCoolHold). Not driving - the start-up
+  // countdown, or a bench test in MANUAL - nothing changes.
   if (!in.tooLong && numberLine(in.text, 'W', num)) {
     coolStartedAt = millis();
     coolMs = num * 1000UL;
     markHeard(in);
-    Link.print(F("COOL - Pi at "));
+    if (!manualMode) {
+      enterManual();              // wheels stopped; the belt is left alone
+      lastCommand = CMD_NONE;     // stale by the time it drives again
+      coolHold = true;
+    }
+    Link.print(F("COOLDOWN - Pi at "));
     Link.print(piTempC);
-    Link.print(F(" C, camera off - wheels stopped for "));
+    Link.print(F(" C, camera off for "));
     Link.print(num);
-    Link.println(F(" s"));
+    Link.println(coolHold ? F(" s - MANUAL stop, A after the countdown") : F(" s"));
     in.len = 0;
     return;
   }
@@ -569,8 +572,19 @@ void ok(const __FlashStringHelper *what) {
   Link.println(what);
 }
 
+// The cool-down's MANUAL stop: count down on the LCD, then A by itself.
+void serviceCoolHold() {
+  if (piCoolingNow()) {
+    lcdCooling((coolMs - (millis() - coolStartedAt) + 999) / 1000);
+    return;
+  }
+  resumeAuto();
+  ok(F("autonomous - cooldown over, A sent by itself"));
+}
+
 void enterManual() {
   cancelAutoStart();
+  coolHold = false;     // a command typed mid-cool-down keeps the rover in MANUAL
   driveStop();
   manualMove = 0;
   approaching = false;
@@ -708,18 +722,19 @@ void printStatus() {
 /*
  * Back to autonomous. The latched command is dropped on the way out: a B
  * or N that arrived during the bench session would otherwise fire a
- * pickup the moment the rover starts driving again. A belt left running
- * by 'C' is stopped too - in AUTO the pickup sequence owns it - and a
- * gate left at a bin's side by 7 / 9 goes home, where sortTo() expects it.
+ * pickup the moment the rover starts driving again. The belt runs the
+ * whole time in AUTO, so it is switched on here, and a gate left at a
+ * bin's side by 7 / 9 goes home, where sortTo() expects it.
  */
 void resumeAuto() {
   autoStartPending = false;
   manualMode  = false;
   manualMove  = 0;
+  coolHold    = false;
   lastCommand = CMD_NONE;
   approaching = false;
   stepPending = false;
-  conveyorStop();
+  conveyorRun();
   gateHome();
 }
 
@@ -740,10 +755,18 @@ bool visionReady() {
 void serviceAutoStart() {
   static uint8_t shown = 0;   // last whole second printed
   static bool waitShown = false;
+  static bool beltStarted = false;
   if (!autoStartPending) return;
 
   uint32_t elapsed = millis() - initStartedAt;
   if (elapsed >= INIT_MS) {
+    // The belt starts when the 10 s countdown ends, camera or not, and runs
+    // from then on - through pickups and cool-downs; only 5 or O stop it.
+    if (!beltStarted) {
+      beltStarted = true;
+      conveyorRun();
+      Link.println(F("INIT - countdown over, belt on"));
+    }
     if (!visionReady()) {
       lcdRow(0, F("Wait for camera"));   // wheels are still stopped from setup()
       if (!waitShown) {
@@ -786,7 +809,7 @@ void printHelp() {
   Link.println(F("          B bio      N non-bio    X none   - at the grab spot: pick up"));
   Link.println(F("          F L R trash ahead: one step forward / turn left / turn right"));
   Link.println(F("          P heartbeat the Pi sends every second - no reply"));
-  Link.println(F("          T87 Pi temperature (LCD)  W30 Pi cooling: wheels stop 30 s"));
+  Link.println(F("          T87 Pi temperature (LCD)  W30 Pi cooling: MANUAL stop, A after 30 s"));
   Link.println(F("replies:  RX received, OK done, FAIL refused, DONE/STOP move ended"));
   Link.println(F("          APPROACH stepping up to trash"));
   Link.println(F("          PICKUP/SORTED a pickup started / its item is in the bin"));

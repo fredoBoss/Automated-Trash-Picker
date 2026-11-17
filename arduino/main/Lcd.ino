@@ -122,7 +122,7 @@ void lcdCountdown(uint8_t seconds) {
 void lcdCooling(uint16_t seconds) {
   if (!lcd) return;
   char row[LCD_COLS + 1];
-  snprintf_P(row, sizeof(row), PSTR("Pi cooling %3us"), seconds);
+  snprintf_P(row, sizeof(row), PSTR("COOLDOWN   %3us"), seconds);
   lcdRow(0, row);
 }
 

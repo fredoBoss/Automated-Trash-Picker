@@ -201,9 +201,11 @@ bool conveyorIsOn() {
   return digitalRead(PIN_CONV_RELAY) == (CONV_RELAY_ACTIVE_LOW ? LOW : HIGH);
 }
 
-// Run the belt long enough to carry one item to the bin, then stop.
+// Run the belt long enough to carry one item to the bin, then stop - unless
+// it was running already: in AUTO the belt runs all the time and is left on.
 void conveyorPulse() {
+  bool wasOn = conveyorIsOn();
   conveyorRun();
   delay(CONVEYOR_RUN_MS);
-  conveyorStop();
+  if (!wasOn) conveyorStop();
 }
