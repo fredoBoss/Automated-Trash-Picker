@@ -49,8 +49,8 @@ COOL_MARGIN = 7
 SLOW_MARGIN = 4
 SLOW_REST_S = 1.0
 
-# After an F/L/R the Mega moves up to 250 ms (main.ino APPROACH_STEP_MS),
-# plus a 200 ms pause first if a wheel reverses, and the rover coasts. The
+# After an F/L/R the Mega moves up to 500 ms (main.ino APPROACH_STEP_MS),
+# and the rover coasts. The
 # next frame has to show where the step left it, or the item looks as far
 # away as before and the rover steps past it.
 STEP_SETTLE_S = 0.8

@@ -92,11 +92,12 @@ class Config:
 # centre it). Earlier zones: (0.22, 0.47, 0.73, 0.87), and before that the
 # grab spot alone, (0.36, 0.84, 0.55, 0.93).
 PICKUP_ZONE = (0.00, 0.08, 1.00, 0.86)
-# GRAB_SPOT: B/N - lift and belt - only once the item's centre is here,
-# where the floor meets the scoop, in the middle. Set as the middle third
-# and bottom third of the (0.22, 0.47, 0.73, 0.87) zone, and kept when the
-# zone grew. Nearer than the spot's bottom edge counts too: the item is then
-# on the scoop.
+# GRAB_SPOT: B/N - lift and belt - once the item's centre is in its columns
+# and the item's near edge (its box's bottom) has reached its top edge, where
+# the floor meets the scoop. Move the top edge (y1) to where an item has to
+# be for the lift to catch it. Its bottom edge is drawn but not used. Set as
+# the middle third and bottom third of the (0.22, 0.47, 0.73, 0.87) zone,
+# and kept when the zone grew.
 GRAB_SPOT = (0.39, 0.74, 0.56, 0.87)
 
 

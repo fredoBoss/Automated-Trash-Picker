@@ -61,14 +61,18 @@ def in_zone(box, zone) -> bool:
 
 
 def at_grab(box, grab) -> bool:
-    """The item's centre is in the grab spot's columns and level with the
-    spot or nearer. Nearer counts: below the spot the item is on the scoop
-    already, and stepping again would push it away."""
+    """The item's centre is in the grab spot's columns, and its near edge -
+    the box's bottom - has reached the spot's top edge, or come nearer.
+    Not the centre: the scoop pushes an item ahead of it, so the item's
+    near edge stops at the scoop and gets no nearer. A can whose box is a
+    quarter of the frame tall then kept its centre at y 0.65, short of the
+    spot's 0.74, so it was pushed for 40 steps and never picked up. The
+    near edge reaches the line whatever the item's size."""
     x1, y1, x2, y2 = box
     gx1, gy1, gx2, _ = grab
     if (x2 - x1) * (y2 - y1) > MAX_ITEM_AREA:
         return False
-    return gx1 <= (x1 + x2) / 2 <= gx2 and (y1 + y2) / 2 >= gy1
+    return gx1 <= (x1 + x2) / 2 <= gx2 and y2 >= gy1
 
 
 def steer(box, grab) -> str:
