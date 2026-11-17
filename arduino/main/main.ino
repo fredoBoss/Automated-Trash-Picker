@@ -31,19 +31,26 @@ const uint8_t PIN_ECHO[2] = {37, 35};
 
 // ------------------------------------------------------------- tuning
 // Relays have no speed control: every move is full battery voltage.
-const uint16_t AVOID_CM      = 60;    // AUTO: a side closer than this -> turn away from it
-const uint16_t STOP_CM       = 20;    // MANUAL: forward refused / cut short closer than this
+const uint16_t AVOID_CM      = 30;    // AUTO: a side closer than this -> turn away from it
+const uint16_t STOP_CM       = 10;    // MANUAL: forward refused / cut short closer than this
 const uint16_t BACKUP_MS     = 300;   // both sides blocked: back out first - blind, no rear sensor
 const uint16_t TURN_MS       = 3000;  // how long an avoidance turn runs
 const uint16_t MANUAL_MOVE_MS = 5000; // how long one manual drive command runs
 const uint16_t INIT_MS       = 10000; // after setup: motors held stopped, then auto start
 const uint32_t CMD_TIMEOUT_MS = 5000; // Pi silence before we assume no target
 // Approach: one F/L/R from the Pi is one short move, then the rover waits
-// stopped for the Pi's next look. Short, so an item cannot jump past the
-// grab spot between two looks - lengthen them if the rover barely moves.
-const uint16_t APPROACH_STEP_MS = 250;  // forward step toward trash
-const uint16_t APPROACH_TURN_MS = 150;  // turn step to centre trash left/right
+// stopped for the Pi's next look. 250 / 150 ms barely moved the rover on
+// the floor (2026-11-16): the relay pulse ended while the motors were still
+// spinning up, and the Pi gave up after 40 steps. Keep a step under ~700 ms:
+// the Pi takes its next look 800 ms after sending (vision.py STEP_SETTLE_S),
+// and the step has to be over by then.
+const uint16_t APPROACH_STEP_MS = 500;  // forward step toward trash
+const uint16_t APPROACH_TURN_MS = 250;  // turn step to centre trash left/right
 const uint16_t APPROACH_HOLD_MS = 3000; // trash lost mid-approach: stay stopped this long
+// Pi silent mid-approach: stay stopped this long for its next look. A hot
+// Pi skips frames for a while (vision.py's heat guard) - with the old 5 s
+// the rover gave up and drove past the item.
+const uint16_t APPROACH_WAIT_MS = 15000;
 
 // ------------------------------------------------------------- state
 enum Command { CMD_NONE = 'X', CMD_BIO = 'B', CMD_NONBIO = 'N', CMD_PING = 'P',
@@ -161,8 +168,13 @@ void loop() {
 
   // Safety first, and without asking the Pi: anything within AVOID_CM on
   // either side stops the wheels and turns the rover away from it,
-  // regardless of what the vision pipeline is reporting.
-  if (distLeft < AVOID_CM || distRight < AVOID_CM) {
+  // regardless of what the vision pipeline is reporting. While the Pi
+  // reports trash in reach, only STOP_CM counts: the rover is creeping up
+  // to it in short steps, and the sonars look sideways, so a wall or a
+  // chair 50 cm to the side is no danger - it only kept turning the rover
+  // away from the trash.
+  uint16_t limit = trashInReach() ? STOP_CM : AVOID_CM;
+  if (distLeft < limit || distRight < limit) {
     driveStop();
     avoidObstacle();
     // The rover has turned away, so whatever the Pi reported before or
@@ -218,6 +230,11 @@ bool isApproachCommand(char c) {
   return c == CMD_AHEAD || c == CMD_LEFT || c == CMD_RIGHT;
 }
 
+// Stepping up to trash, or the Pi has just reported trash in reach.
+bool trashInReach() {
+  return approaching || (lastCommand != CMD_NONE && isCommandFresh());
+}
+
 /*
  * Every AUTO loop: drive up to trash the Pi sees in the pickup zone. The Pi
  * sends F (straight ahead), L or R (off to that side) for each frame while
@@ -231,11 +248,11 @@ bool isApproachCommand(char c) {
  *    for the next one. The Pi waits for the step to end before it looks.
  *  - X (lost the item): stay stopped APPROACH_HOLD_MS, so one missed frame
  *    does not send the rover driving over the item, then cruise. A silent
- *    Pi: stay stopped until the last F/L/R is CMD_TIMEOUT_MS old, then cruise.
+ *    Pi: stay stopped until the last F/L/R is APPROACH_WAIT_MS old, then cruise.
  *  - After a pickup the same hold runs, so the Pi gets one look first.
  */
 bool serviceApproach() {
-  if (isApproachCommand(lastCommand) && isCommandFresh()) {
+  if (isApproachCommand(lastCommand) && millis() - lastCommandAt < APPROACH_WAIT_MS) {
     if (!approaching) {
       approaching = true;
       stepPending = false;
