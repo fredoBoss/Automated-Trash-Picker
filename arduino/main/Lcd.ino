@@ -118,6 +118,14 @@ void lcdCountdown(uint8_t seconds) {
   lcdRow(0, row);
 }
 
+// Row 0 while the Pi cools with its model off, and the wheels wait.
+void lcdCooling(uint16_t seconds) {
+  if (!lcd) return;
+  char row[LCD_COLS + 1];
+  snprintf_P(row, sizeof(row), PSTR("Pi cooling %3us"), seconds);
+  lcdRow(0, row);
+}
+
 // Row 0 during a pickup: which bin the item is headed for, and the step.
 void lcdPickup(char command, const __FlashStringHelper *step) {
   if (!lcd) return;
@@ -158,8 +166,16 @@ char visionHost() {
 void lcdService() {
   if (!lcd) return;
   char row[LCD_COLS + 1];
+  // The Pi's T line comes every 2 s; older than PI_TEMP_STALE_MS is not shown.
+  const uint32_t PI_TEMP_STALE_MS = 5000;
+  bool tempFresh = piTempKnown && millis() - piTempAt <= PI_TEMP_STALE_MS;
   switch (visionHost()) {
-    case 'P': snprintf_P(row, sizeof(row), PSTR("Pi OK  %S"), (PGM_P)classLabel(lastSeen)); break;
+    case 'P':
+      if (tempFresh)   // "Pi 87C NON-BIO"
+        snprintf_P(row, sizeof(row), PSTR("Pi%3uC %S"), piTempC, (PGM_P)classLabel(lastSeen));
+      else
+        snprintf_P(row, sizeof(row), PSTR("Pi OK  %S"), (PGM_P)classLabel(lastSeen));
+      break;
     case 'U': snprintf_P(row, sizeof(row), PSTR("USB OK %S"), (PGM_P)classLabel(lastSeen)); break;
     case 'L': strcpy_P(row, PSTR("Pi: lost")); break;
     default:  strcpy_P(row, autoStartPending ? PSTR("Pi: checking...") : PSTR("Pi: not found"));

@@ -40,8 +40,13 @@ import serial_link
 from config import CFG
 
 THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
-# After a pause, resume this many deg C below max_temp. Small, because the
-# Pi with no heatsink idles only ~10 C under the limit and never gets lower.
+# At max_temp the model is turned off for this long, and the Mega is told
+# to stop the wheels for as long (serial_link.cooling). Then the next frame
+# checks again: still at max_temp means another 30 s.
+COOL_PAUSE_S = 30
+# The warm-up frame is the heaviest (~2 s of full load); it only starts this
+# many deg C below max_temp. Small, because the Pi with no heatsink idles
+# only ~10 C under the limit and never gets lower.
 COOL_MARGIN = 7
 # Within SLOW_MARGIN of max_temp, rest SLOW_REST_S between frames. Back to
 # back, one or two frames took the bare H3 from 88 C to 96-100 C - past the
@@ -111,17 +116,24 @@ def cpu_temp() -> float | None:
 
 
 def cool_down(link, temp: float) -> None:
-    """Too hot: stop running the model until the chip has cooled. Without a
-    heatsink the H3 reached 105 C and the kernel powered the Pi off mid-run.
+    """Too hot: turn the model off for COOL_PAUSE_S and have the Mega stop
+    the wheels for as long - driving on with the camera off ran the rover
+    past trash. Without a heatsink the H3 reached 105 C and the kernel
+    powered the Pi off mid-run.
     X goes out first, so the Mega does not act on an old sighting. The link's
-    heartbeat runs on its own thread, so the Mega still sees the Pi as alive."""
-    resume = CFG.max_temp - COOL_MARGIN
-    link.send(classify.NONE)
-    print(f"  CPU {temp:.0f} C - pausing the model until it is down to {resume:g} C")
-    start = time.monotonic()
-    while (temp := cpu_temp()) is not None and temp > resume:
-        time.sleep(2)
-    print(f"  CPU {temp:.0f} C - resuming after {time.monotonic() - start:.0f} s")
+    heartbeat keeps running on its own thread - P and the temperature - so
+    the Mega still sees the Pi as alive and its LCD shows the cooling.
+    Before the first frame there is no sighting to cancel, and the Mega takes
+    the first B/N/X/F/L/R as "the camera is running" and starts driving - so
+    nothing goes out until a frame has really been classified."""
+    if link.last_command is not None:
+        link.send(classify.NONE)
+    link.cooling(COOL_PAUSE_S)
+    print(f"  CPU {temp:.0f} C - model off, wheels stopped for {COOL_PAUSE_S} s to cool")
+    time.sleep(COOL_PAUSE_S)
+    now = cpu_temp()
+    print(f"  CPU {now:.0f} C after {COOL_PAUSE_S} s - checking again"
+          if now is not None else f"  {COOL_PAUSE_S} s up - checking again")
 
 
 def wait_for_camera(source: str) -> str:
@@ -186,7 +198,8 @@ def main():
                                 grab=CFG.grab_spot)
     pilot = Pilot()
     link = serial_link.open_link(
-        args.port, CFG.baud_rate, CFG.serial_retries, dry_run=args.dry_run
+        args.port, CFG.baud_rate, CFG.serial_retries, dry_run=args.dry_run,
+        temp_source=cpu_temp,       # the Mega shows it on its LCD
     )
 
     if show:

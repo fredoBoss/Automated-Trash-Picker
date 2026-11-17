@@ -66,6 +66,18 @@ bool     piHeard       = false;    // any on the Pi's wire since boot
 uint32_t piHeardAt     = 0;        // when the latest one arrived
 bool     usbHeard      = false;    // the same, for USB
 uint32_t usbHeardAt    = 0;
+// A B/N/X/F/L/R has arrived since boot: vision.py has run its model on a
+// camera frame. P does not count - the Pi sends it from the moment the port
+// is open, seconds before the model's first frame.
+bool     visionSeen    = false;
+// From the Pi's T<deg C> lines (every 2 s) and W<seconds> line: its CPU
+// temperature for the LCD, and a cool-down - its model is off, so the
+// wheels stay stopped until it is over.
+uint16_t piTempC       = 0;
+uint32_t piTempAt      = 0;
+bool     piTempKnown   = false;
+uint32_t coolStartedAt = 0;
+uint32_t coolMs        = 0;       // 0 = no cool-down
 bool     pickupBusy    = false;   // true while the arm sequence is running
 bool     approaching   = false;   // AUTO stopped for trash ahead, stepping up to it
 bool     stepPending   = false;   // an F/L/R arrived and its step has not run yet
@@ -147,7 +159,7 @@ void setup() {
   printSensorCheck();             // pings both sonars, adds their LCD lines
   Link.print(F("INIT - driving starts in "));
   Link.print(INIT_MS / 1000);
-  Link.println(F(" s. Any drive/arm/gate command cancels it; A starts now."));
+  Link.println(F(" s, or once vision.py's camera is running if later. Any drive/arm/gate command cancels it; A starts now."));
   initStartedAt = millis();
 }
 
@@ -161,6 +173,19 @@ void loop() {
   // navigation logic. Only a drive command in progress needs watching.
   if (manualMode) {
     serviceManualMove();
+    return;
+  }
+
+  // The Pi has turned its model off to cool: driving on with the camera off
+  // ran the rover past trash, so the wheels stay stopped until the cool-down
+  // is over. Whatever it reported before is stale by then; its next frame
+  // starts afresh.
+  if (piCoolingNow()) {
+    driveStop();
+    lastCommand = CMD_NONE;
+    approaching = false;
+    stepPending = false;
+    lcdCooling((coolMs - (millis() - coolStartedAt) + 999) / 1000);
     return;
   }
 
@@ -364,9 +389,59 @@ char commandFor(const char *line) {
   return wordToCommand(line);
 }
 
+// The vision pipeline is talking on this port. Only on the Pi's wire is it
+// the Pi.
+void markHeard(LineIn &in) {
+  if (&in == &fromPi) { piHeard  = true; piHeardAt  = millis(); }
+  else                { usbHeard = true; usbHeardAt = millis(); }
+}
+
+// "T87" or "W30": the letter, then 1-3 digits. value gets the number.
+bool numberLine(const char *text, char letter, uint16_t &value) {
+  if (text[0] != letter || text[1] == '\0' || strlen(text) > 4) return false;
+  uint16_t v = 0;
+  for (const char *p = text + 1; *p; p++) {
+    if (*p < '0' || *p > '9') return false;
+    v = v * 10 + (*p - '0');
+  }
+  value = v;
+  return true;
+}
+
+bool piCoolingNow() {
+  return coolMs != 0 && millis() - coolStartedAt < coolMs;
+}
+
 void endLine(LineIn &in) {
   in.text[in.len] = '\0';
   bool any = in.len > 0 || in.tooLong;
+  uint16_t num;
+
+  // T<deg C> every 2 s: the Pi's temperature, for the LCD. Not echoed -
+  // like P, it would bury every other line.
+  if (!in.tooLong && numberLine(in.text, 'T', num)) {
+    piTempC = num;
+    piTempAt = millis();
+    piTempKnown = true;
+    markHeard(in);
+    in.len = 0;
+    return;
+  }
+  // W<seconds>: the Pi turned its model off to cool - loop() keeps the
+  // wheels stopped until it is over.
+  if (!in.tooLong && numberLine(in.text, 'W', num)) {
+    coolStartedAt = millis();
+    coolMs = num * 1000UL;
+    markHeard(in);
+    Link.print(F("COOL - Pi at "));
+    Link.print(piTempC);
+    Link.print(F(" C, camera off - wheels stopped for "));
+    Link.print(num);
+    Link.println(F(" s"));
+    in.len = 0;
+    return;
+  }
+
   char c   = in.tooLong ? 0 : commandFor(in.text);
 
   if (c) {
@@ -376,8 +451,8 @@ void endLine(LineIn &in) {
     // "Pi: lost", with no Pi wired at all.
     if (c == CMD_PING || c == CMD_BIO || c == CMD_NONBIO || c == CMD_NONE ||
         isApproachCommand(c)) {
-      if (&in == &fromPi) { piHeard  = true; piHeardAt  = millis(); }
-      else                { usbHeard = true; usbHeardAt = millis(); }
+      markHeard(in);
+      if (c != CMD_PING) visionSeen = true;
     }
     // P is the Pi's once-a-second heartbeat. It only marks the Pi as alive,
     // so it is not echoed - RX P every second would bury every other line.
@@ -612,7 +687,10 @@ void printStatus() {
   Link.print(F(" s"));
   // The LCD's bottom row, for whoever cannot see the screen.
   switch (visionHost()) {
-    case 'P': Link.print(F(", Pi OK"));     break;
+    case 'P': Link.print(F(", Pi OK"));
+              if (piTempKnown) { Link.print(F(" ")); Link.print(piTempC); Link.print(F(" C")); }
+              if (piCoolingNow()) Link.print(F(" cooling"));
+              break;
     case 'U': Link.print(F(", USB OK"));    break;
     case 'L': Link.print(F(", Pi lost"));   break;
     default:  Link.print(F(", Pi not heard"));
@@ -622,6 +700,7 @@ void printStatus() {
     Link.print(F(", auto start in "));
     Link.print(elapsed >= INIT_MS ? 0 : (INIT_MS - elapsed + 999) / 1000);
     Link.print(F(" s"));
+    if (!visionReady()) Link.print(F(", waiting for the camera"));
   }
   Link.println();
 }
@@ -644,14 +723,35 @@ void resumeAuto() {
   gateHome();
 }
 
-// Every loop: count the init period down once a second, then start
-// driving. Nothing happens once it has fired or been cancelled.
+/*
+ * Is the camera pipeline running, so the rover can see what it drives at?
+ * vision.py has sent a result (not just P), and is still talking. The Pi
+ * takes ~25 s from power-on to its first frame, the Mega's countdown only
+ * 10 s - without this the rover drove its first 15 s or more blind.
+ */
+bool visionReady() {
+  char host = visionHost();
+  return visionSeen && (host == 'P' || host == 'U');
+}
+
+// Every loop: count the init period down once a second, then wait for the
+// camera pipeline, then start driving. Nothing happens once it has fired or
+// been cancelled. A starts at once, camera or not.
 void serviceAutoStart() {
   static uint8_t shown = 0;   // last whole second printed
+  static bool waitShown = false;
   if (!autoStartPending) return;
 
   uint32_t elapsed = millis() - initStartedAt;
   if (elapsed >= INIT_MS) {
+    if (!visionReady()) {
+      lcdRow(0, F("Wait for camera"));   // wheels are still stopped from setup()
+      if (!waitShown) {
+        waitShown = true;
+        Link.println(F("INIT - waiting for vision.py's first frame before driving (A starts now)"));
+      }
+      return;
+    }
     resumeAuto();
     Link.print(F("AUTO - init done, driving forward; turns away from anything within "));
     Link.print(AVOID_CM);
@@ -686,6 +786,7 @@ void printHelp() {
   Link.println(F("          B bio      N non-bio    X none   - at the grab spot: pick up"));
   Link.println(F("          F L R trash ahead: one step forward / turn left / turn right"));
   Link.println(F("          P heartbeat the Pi sends every second - no reply"));
+  Link.println(F("          T87 Pi temperature (LCD)  W30 Pi cooling: wheels stop 30 s"));
   Link.println(F("replies:  RX received, OK done, FAIL refused, DONE/STOP move ended"));
   Link.println(F("          APPROACH stepping up to trash"));
   Link.println(F("          PICKUP/SORTED a pickup started / its item is in the bin"));

@@ -30,11 +30,13 @@ PROFILES = {
         # 81% of the time (15 frames/min); 1 core ran 1.13 s/frame and paused
         # 5% (48 frames/min). Back to 2 once the Pi has a heatsink.
         "threads": 1,
-        # vision.py pauses inference here and resumes 7 C lower. The kernel
-        # throttles from 75 C and powers off at 105 C. With no heatsink this
-        # Pi idles at ~85 C (480 MHz, but the CPU stays at 1.3 V), so a lower
-        # limit would keep the model paused for good.
-        "max_temp": 95,
+        # At this temperature vision.py turns the model off for 30 s
+        # (vision.py COOL_PAUSE_S) and the Mega stops the wheels meanwhile.
+        # The kernel throttles from 75 C and powers off at 105 C; one frame
+        # can add 5-8 C, so 94 leaves room. With no heatsink this Pi idles at
+        # ~85 C (the CPU stays at 1.3 V), so a much lower limit would keep the
+        # model off for good.
+        "max_temp": 94,
     },
 }
 

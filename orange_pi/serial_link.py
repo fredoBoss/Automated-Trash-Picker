@@ -11,6 +11,10 @@ What this side sends (one character + newline, ASCII):
     X\n   nothing detected
     P\n   heartbeat, once a second - the Mega does not reply, it only
           notes the time so its LCD can show whether the Pi is talking
+    T87\n the Pi's CPU temperature in deg C, every TEMP_EVERY_S - for the
+          Mega's LCD; no reply
+    W30\n the Pi has turned its model off to cool for 30 s - the Mega
+          stops the wheels for as long, and counts down on its LCD
 
 The Mega latches B/N and, while driving on its own, stops for one pickup
 on a latch younger than 5 s, then clears it. So a command goes out only
@@ -50,10 +54,12 @@ A reader thread prints these with a "mega:" prefix and watches for:
     the start-up part checks, when the Mega does not read serial at all; a
     command sent during the checks is timed from their end.
 
-Opening the port resets the Mega (the USB-serial chip pulses DTR), which
+Opening a USB port resets the Mega (the USB-serial chip pulses DTR), which
 reruns its start-up: the boot banner, the part checks (~3 s with the LCD,
-a missing sonar holds 2 s more), then the 10 s countdown. The rover
-drives off ~15 s after this program connects.
+a missing sonar holds 2 s more), then the 10 s countdown. The Pi's UART
+(/dev/ttyS*) does not reset it, and nothing waits for a banner there.
+Either way the Mega does not drive off until the first result of this
+program's first frame has arrived - B/N/X/F/L/R, not the P heartbeat.
 
 Use DryRunLink to exercise the whole pipeline with no Arduino attached.
 """
@@ -70,10 +76,18 @@ STEP_COMMANDS = ("F", "L", "R")
 MEGA_BANNER = "RoboSort Mega ready"
 AUTO_LINES = ("AUTO - init done", "OK autonomous")   # the Mega just entered AUTO
 CHECKS_DONE_LINE = "INIT - driving starts"   # last line of setup(), serial is read after it
-BOOT_WAIT_S = 6.0   # bootloader ~2 s + setup (servos homing) ~1 s, with margin
+BOOT_WAIT_S = 6.0   # USB only: bootloader ~2 s + setup (servos homing) ~1 s, with margin
+
+
+def resets_on_open(port: str) -> bool:
+    """Does opening this port reset the Mega? Over USB it does - the
+    USB-serial chip pulses DTR. The Pi's own UART (/dev/ttyS*, wired to the
+    Mega's Serial1) has no DTR line, so the Mega keeps running."""
+    return not port.startswith("/dev/ttyS")
 ACK_WARN_S = 3.0
 PING = "P"
 HEARTBEAT_S = 1.0   # the Mega's LCD calls the Pi lost after 3 s without a line
+TEMP_EVERY_S = 2.0  # how often the CPU temperature goes to the Mega's LCD
 # The space matters: the Mega's help text has a line starting "PICKUP/SORTED".
 PICKUP_LINE = "PICKUP "  # the Mega stopped for an item - hold commands
 SORTED_LINE = "SORTED "  # the item is in its bin - send again
@@ -117,6 +131,12 @@ class _BaseLink:
     def _write(self, command: str) -> None:
         raise NotImplementedError
 
+    def cooling(self, seconds: float) -> None:
+        """Tell the Mega the model is off for `seconds` to cool: it stops
+        the wheels for as long. Not a command - no RX is awaited, and
+        last_command is untouched."""
+        raise NotImplementedError
+
     def close(self) -> None:
         pass
 
@@ -128,11 +148,14 @@ class _BaseLink:
 
 
 class SerialLink(_BaseLink):
-    def __init__(self, port: str, baud: int, retries: int = 5, echo: bool = True):
+    def __init__(self, port: str, baud: int, retries: int = 5, echo: bool = True,
+                 temp_source=None):
         super().__init__()
         import serial          # late import so DryRunLink works without pyserial
 
         self.echo = echo
+        self._temp_source = temp_source    # () -> deg C or None; None = send no T
+        self._last_temp_tx = 0.0
         self._lock = threading.Lock()
         self._wlock = threading.Lock()
         self._last_tx = 0.0
@@ -155,16 +178,23 @@ class SerialLink(_BaseLink):
         else:
             raise RuntimeError(f"Cannot open serial port {port}: {last_error}")
 
-        print(f"Serial open: {port} @ {baud} - waiting for the Mega to boot")
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
-        # Anything written while the bootloader runs is lost, so wait for the
-        # banner rather than a fixed sleep. No banner means the port did not
-        # reset it (or it is not answering) - carry on either way.
-        if self._booted.wait(BOOT_WAIT_S):
-            print("Mega is up - part checks, then a 10 s countdown before it drives")
+        if not resets_on_open(port):
+            # The Pi's UART: opening it does not reset the Mega, so there is no
+            # banner to wait for. Waiting BOOT_WAIT_S here only delayed the
+            # first frame by 6 s on every start - and the Mega now holds its
+            # wheels until that frame's result arrives (main.ino visionReady).
+            print(f"Serial open: {port} @ {baud} (UART - no Mega reset)")
         else:
-            print(f"  no boot banner within {BOOT_WAIT_S:.0f} s - carrying on")
+            # USB: opening the port reset the Mega, and anything written while
+            # its bootloader runs is lost - wait for the banner. No banner means
+            # it is not answering; carry on either way.
+            print(f"Serial open: {port} @ {baud} - waiting for the Mega to boot")
+            if self._booted.wait(BOOT_WAIT_S):
+                print("Mega is up - part checks, then it drives once vision is running")
+            else:
+                print(f"  no boot banner within {BOOT_WAIT_S:.0f} s - carrying on")
         self._live = True
 
     def _write(self, command: str) -> None:
@@ -187,10 +217,23 @@ class SerialLink(_BaseLink):
         minutes. Any command resets the clock, so P only fills the gaps.
         Nothing is sent before the boot wait is over: bytes that reach the
         bootloader are lost at best."""
-        if not self._live or time.monotonic() - self._last_tx < HEARTBEAT_S:
+        if not self._live:
             return
         try:
-            self._tx(PING)
+            now = time.monotonic()
+            if self._temp_source and now - self._last_temp_tx >= TEMP_EVERY_S:
+                self._last_temp_tx = now
+                temp = self._temp_source()
+                if temp is not None:
+                    self._tx(f"T{temp:.0f}")   # counts as a heartbeat too
+            if time.monotonic() - self._last_tx >= HEARTBEAT_S:
+                self._tx(PING)
+        except Exception:
+            pass                             # a dead port is reported by the read side
+
+    def cooling(self, seconds: float) -> None:
+        try:
+            self._tx(f"W{seconds:.0f}")
         except Exception:
             pass                             # a dead port is reported by the read side
 
@@ -324,8 +367,12 @@ class DryRunLink(_BaseLink):
     def _write(self, command: str) -> None:
         print(f"  [dry-run] would send {command!r} ({CMD_NAMES.get(command, '?')})")
 
+    def cooling(self, seconds: float) -> None:
+        print(f"  [dry-run] would send 'W{seconds:.0f}' (cooling - wheels stop)")
 
-def open_link(port: str, baud: int, retries: int = 5, dry_run: bool = False):
+
+def open_link(port: str, baud: int, retries: int = 5, dry_run: bool = False,
+              temp_source=None):
     if dry_run:
         return DryRunLink()
-    return SerialLink(port, baud, retries)
+    return SerialLink(port, baud, retries, temp_source=temp_source)
