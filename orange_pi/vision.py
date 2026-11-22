@@ -54,11 +54,11 @@ COOL_MARGIN = 7
 SLOW_MARGIN = 4
 SLOW_REST_S = 1.0
 
-# After an F/L/R the Mega moves up to 500 ms (main.ino APPROACH_STEP_MS),
-# and the rover coasts. The
-# next frame has to show where the step left it, or the item looks as far
-# away as before and the rover steps past it.
-STEP_SETTLE_S = 0.8
+# After an F/L/R the Mega moves up to 1000 ms (main.ino APPROACH_STEP_MS),
+# and the rover coasts. The next frame has to show where the step left it,
+# or the item looks as far away as before and the rover steps past it - so
+# this stays ~0.3 s longer than the step. Was 0.8 for 500 ms steps.
+STEP_SETTLE_S = 1.3
 # Pickups tried on one item before giving up on it. A scoop that missed
 # leaves the item at the grab spot, and a mark on the floor the model takes
 # for trash would otherwise be "picked up" for ever.

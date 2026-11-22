@@ -41,11 +41,12 @@ const uint32_t CMD_TIMEOUT_MS = 5000; // Pi silence before we assume no target
 // Approach: one F/L/R from the Pi is one short move, then the rover waits
 // stopped for the Pi's next look. 250 / 150 ms barely moved the rover on
 // the floor (2026-11-16): the relay pulse ended while the motors were still
-// spinning up, and the Pi gave up after 40 steps. Keep a step under ~700 ms:
-// the Pi takes its next look 800 ms after sending (vision.py STEP_SETTLE_S),
-// and the step has to be over by then.
+// spinning up, and the Pi gave up after 40 steps. Keep a step ~300 ms
+// shorter than vision.py STEP_SETTLE_S (1.3 s for this 1000 ms step): the
+// Pi takes its next look that long after sending, and the step has to be
+// over by then. Change the two together.
 const uint16_t APPROACH_STEP_MS = 1000;  // forward step toward trash
-const uint16_t APPROACH_TURN_MS = 250;  // turn step to centre trash left/right
+const uint16_t APPROACH_TURN_MS = 800;  // turn step to centre trash left/right
 const uint16_t APPROACH_HOLD_MS = 3000; // trash lost mid-approach: stay stopped this long
 // Pi silent mid-approach: stay stopped this long for its next look. A hot
 // Pi skips frames for a while (vision.py's heat guard) - with the old 5 s
