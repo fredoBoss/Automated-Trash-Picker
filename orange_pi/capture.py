@@ -169,13 +169,19 @@ class CameraSource:
         before a long pause - see STALE_S. Back to back, as in a live
         window on the laptop, it is a plain read."""
         if time.perf_counter() - self._last_read > STALE_S:
+            grabbed = False
             for _ in range(FLUSH_MAX):
                 start = time.perf_counter()
                 if not self.cap.grab():
                     break
+                grabbed = True
                 if time.perf_counter() - start > GRAB_WAITED_S:
                     break                   # it waited for the camera: a new frame
-            ok, frame = self.cap.retrieve()
+            # No grab worked: the camera is gone. retrieve() would still hand
+            # back the last frame it had, as good - with the camera unplugged
+            # the Pi sent "Paper 0.90, step forward" off one frozen frame for
+            # 16 minutes. A failed read lets frames() count it and give up.
+            ok, frame = self.cap.retrieve() if grabbed else (False, None)
         else:
             ok, frame = self.cap.read()
         self._last_read = time.perf_counter()
