@@ -163,7 +163,7 @@ void setup() {
   printSensorCheck();             // pings both sonars, adds their LCD lines
   Link.print(F("INIT - driving starts in "));
   Link.print(INIT_MS / 1000);
-  Link.println(F(" s, or once vision.py's camera is running if later. Any drive/arm/gate command cancels it; A starts now."));
+  Link.println(F(" s, camera or not. Any drive/arm/gate command cancels it; A starts now."));
   initStartedAt = millis();
 }
 
@@ -714,7 +714,7 @@ void printStatus() {
     Link.print(F(", auto start in "));
     Link.print(elapsed >= INIT_MS ? 0 : (INIT_MS - elapsed + 999) / 1000);
     Link.print(F(" s"));
-    if (!visionReady()) Link.print(F(", waiting for the camera"));
+    if (!visionReady()) Link.print(F(", camera not heard yet"));
   }
   Link.println();
 }
@@ -739,46 +739,35 @@ void resumeAuto() {
 }
 
 /*
- * Is the camera pipeline running, so the rover can see what it drives at?
- * vision.py has sent a result (not just P), and is still talking. The Pi
- * takes ~25 s from power-on to its first frame, the Mega's countdown only
- * 10 s - without this the rover drove its first 15 s or more blind.
+ * Has the camera pipeline been heard: vision.py sent a result (not just P)
+ * and is still talking? Only reported now - the rover no longer waits for
+ * it. It used to hold the wheels until the first result, but the Pi sends X
+ * only when its result changes, so a Mega reset (opening the Serial Monitor
+ * resets it) on an empty floor left it waiting for good: the Pi cannot see
+ * the reset, its replies from the Mega arrive garbled (2026-11-22).
  */
 bool visionReady() {
   char host = visionHost();
   return visionSeen && (host == 'P' || host == 'U');
 }
 
-// Every loop: count the init period down once a second, then wait for the
-// camera pipeline, then start driving. Nothing happens once it has fired or
-// been cancelled. A starts at once, camera or not.
+// Every loop: count the init period down once a second, then drive - with
+// the camera or without it; trash it reports later is picked up as usual.
+// The belt starts with it (resumeAuto) and runs from then on, through
+// pickups and cool-downs; only 5 or O stop it. Nothing happens once it has
+// fired or been cancelled. A starts at once.
 void serviceAutoStart() {
   static uint8_t shown = 0;   // last whole second printed
-  static bool waitShown = false;
-  static bool beltStarted = false;
   if (!autoStartPending) return;
 
   uint32_t elapsed = millis() - initStartedAt;
   if (elapsed >= INIT_MS) {
-    // The belt starts when the 10 s countdown ends, camera or not, and runs
-    // from then on - through pickups and cool-downs; only 5 or O stop it.
-    if (!beltStarted) {
-      beltStarted = true;
-      conveyorRun();
-      Link.println(F("INIT - countdown over, belt on"));
-    }
-    if (!visionReady()) {
-      lcdRow(0, F("Wait for camera"));   // wheels are still stopped from setup()
-      if (!waitShown) {
-        waitShown = true;
-        Link.println(F("INIT - waiting for vision.py's first frame before driving (A starts now)"));
-      }
-      return;
-    }
     resumeAuto();
-    Link.print(F("AUTO - init done, driving forward; turns away from anything within "));
+    Link.print(F("AUTO - init done, driving forward, belt on; turns away from anything within "));
     Link.print(AVOID_CM);
     Link.println(F(" cm. Send 5 to stop."));
+    if (!visionReady())
+      Link.println(F("AUTO - no result from vision.py yet: driving without the camera until it reports"));
     return;
   }
 
