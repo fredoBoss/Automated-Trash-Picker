@@ -1,6 +1,6 @@
-description: Ultralytics rover model trained on data.yaml
+description: Ultralytics rover-data-v4 model trained on data.yaml
 author: Ultralytics
-date: '2026-11-15T13:09:49.479919+08:00'
+date: '2026-11-17T23:41:41.293610+08:00'
 version: 8.4.164
 license: AGPL-3.0 License (https://ultralytics.com/license)
 docs: https://docs.ultralytics.com
