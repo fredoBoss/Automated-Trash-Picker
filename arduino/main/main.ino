@@ -44,13 +44,19 @@ const uint32_t CMD_TIMEOUT_MS = 5000; // Pi silence before we assume no target
 // spinning up, and the Pi gave up after 40 steps. Keep a step under ~700 ms:
 // the Pi takes its next look 800 ms after sending (vision.py STEP_SETTLE_S),
 // and the step has to be over by then.
-const uint16_t APPROACH_STEP_MS = 500;  // forward step toward trash
+const uint16_t APPROACH_STEP_MS = 1000;  // forward step toward trash
 const uint16_t APPROACH_TURN_MS = 250;  // turn step to centre trash left/right
 const uint16_t APPROACH_HOLD_MS = 3000; // trash lost mid-approach: stay stopped this long
 // Pi silent mid-approach: stay stopped this long for its next look. A hot
 // Pi skips frames for a while (vision.py's heat guard) - with the old 5 s
 // the rover gave up and drove past the item.
 const uint16_t APPROACH_WAIT_MS = 15000;
+// Pickup: drive forward this long before the arm rises, so the scoop slides
+// under the item. With the grab spot reaching to y 0.53 the lift started
+// while the item was still ahead of the scoop, and two lifts in a row left a
+// plastic item where it was (2026-11-22). Raise it if items are still left
+// in front of the scoop; lower it if the scoop pushes them away.
+const uint16_t SCOOP_DRIVE_MS = 800;
 
 // ------------------------------------------------------------- state
 enum Command { CMD_NONE = 'X', CMD_BIO = 'B', CMD_NONBIO = 'N', CMD_PING = 'P',
@@ -215,7 +221,14 @@ void loop() {
     // between, so the item on the arm or a flicker cannot start another.
     Link.print(F("PICKUP "));
     Link.print(classLabel(item));
-    Link.println(F(" - arm up, belt, gate"));
+    Link.println(F(" - drive in, arm up, belt, gate"));
+    lcdPickup(item, F("scoop"));
+    scoopForward();
+    if (manualMode) {           // a 5 during the drive-in: no lift either
+      lastCommand = CMD_NONE;
+      Link.println(F("SORTED - pickup cancelled by a stop"));   // the Pi stops holding
+      return;
+    }
     lcdPickup(item, F("pick up"));
     runPickupSequence();
     lcdPickup(item, F("sorting"));
@@ -244,6 +257,21 @@ void loop() {
 
   lcdRow(0, F("AUTO driving"));
   driveForward();
+}
+
+// Drive the scoop under the item, SCOOP_DRIVE_MS, then stop - the first part
+// of a pickup. Keeps the heartbeat going and reads serial like
+// approachStep(), so a 5 sent now stops the wheels at once.
+void scoopForward() {
+  driveForward();
+  uint32_t start = millis();
+  while (millis() - start < SCOOP_DRIVE_MS) {
+    heartbeat();
+    readSerialCommand();
+    if (manualMode) break;   // a 5 took over and has already stopped the wheels
+    delay(1);
+  }
+  driveStop();
 }
 
 bool isApproachCommand(char c) {
